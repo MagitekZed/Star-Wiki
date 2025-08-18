@@ -57,28 +57,6 @@ let edgeGroup = new THREE.Group();
 scene.add(starGroup);
 scene.add(edgeGroup);
 
-// groups for ghost clusters and trail
-const ghostGroup = new THREE.Group();
-scene.add(ghostGroup);
-
-// path history
-const PATH = [];
-let pathIndex = -1;
-const ghosts = [];
-
-// trail polyline
-const trailMaterial = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.3 });
-const trailGeometry = new THREE.BufferGeometry();
-const trailLine = new THREE.Line(trailGeometry, trailMaterial);
-scene.add(trailLine);
-
-const MAX_GHOSTS = 7;
-let trailEnabled = true;
-try {
-  const savedTrail = localStorage.getItem('trailEnabled');
-  if (savedTrail !== null) trailEnabled = savedTrail === '1';
-} catch{}
-
 const starTexture = createStarTexture();
 const materialCenter = new THREE.SpriteMaterial({
   map: starTexture,
@@ -172,35 +150,6 @@ function directionFromTitle(title){
 
 function clearGroup(g){
   while (g.children.length) g.remove(g.children.pop());
-}
-
-function ghostifyGroup(gStar, gEdge){
-  gStar.traverse(obj => {
-    if(obj.material && 'opacity' in obj.material){
-      obj.material.opacity *= 0.3;
-      obj.material.transparent = true;
-    }
-  });
-  gEdge.traverse(obj => {
-    if(obj.material && 'opacity' in obj.material){
-      obj.material.opacity *= 0.15;
-      obj.material.transparent = true;
-    }
-  });
-}
-
-function updateTrail(){
-  if(!trailEnabled) {
-    trailLine.visible = false;
-    return;
-  }
-  trailLine.visible = true;
-  const points = PATH.map(p => p.pos.clone());
-  if(points.length < 2){
-    trailLine.geometry.setFromPoints([]);
-  } else {
-    trailLine.geometry.setFromPoints(points);
-  }
 }
 
 // ====== Wikipedia adapter ======
@@ -361,6 +310,7 @@ async function getPageStar(title, backlinks=false){
 
 // ====== Star building ======
 let currentTitle = null;
+let breadcrumbs = [];
 const visited = new Set();
 let wordToMesh = new Map();
 let showBacklinks = false;
@@ -451,7 +401,7 @@ function buildStarInto(centerTitle, data, gStar, gEdge, map){
   updateSidebar(data.center, sidebarNeighbors);
 }
 
-function rebuildStar(title, resetPath=true){
+function rebuildStar(title, addTrail=true){
   const overlay = document.getElementById('loading');
   const text = document.getElementById('loadingText');
   text.textContent = `Loading ${title}…`;
@@ -465,15 +415,7 @@ function rebuildStar(title, resetPath=true){
     controls.target.set(0,0,0);
     fadeInGroups();
     visited.add(canonical);
-    if (resetPath){
-      PATH.length = 0; ghosts.length = 0; clearGroup(ghostGroup);
-      PATH.push({ title: canonical, pos: new THREE.Vector3(0,0,0) });
-      pathIndex = 0;
-      previousTitle = null;
-    } else {
-      previousTitle = PATH[pathIndex-1]? PATH[pathIndex-1].title : null;
-    }
-    updateTrail();
+    if (addTrail) breadcrumbs.push(canonical);
     updateBreadcrumbs();
   }).catch(err => {
     console.error(err);
@@ -484,14 +426,12 @@ function rebuildStar(title, resetPath=true){
 
 // ====== Travel ======
 let isAnimating = false;
-async function travelToNeighbor(targetTitle, historyIndex=null){
+async function travelToNeighbor(targetTitle){
   if (isAnimating || !currentTitle || !wordToMesh.has(targetTitle)) return;
   isAnimating = true;
 
   const from = new THREE.Vector3(0,0,0);
   const to = wordToMesh.get(targetTitle).position.clone();
-  const fromPos = PATH[pathIndex]?.pos.clone() || new THREE.Vector3();
-  const newPos = fromPos.clone().add(to);
 
   previousTitle = currentTitle;
 
@@ -554,19 +494,7 @@ async function travelToNeighbor(targetTitle, historyIndex=null){
 
     if (t < 1) requestAnimationFrame(tick);
     else {
-      if(trailEnabled){
-        starGroup.position.copy(fromPos);
-        edgeGroup.position.copy(fromPos);
-        ghostifyGroup(starGroup, edgeGroup);
-        ghostGroup.add(starGroup); ghostGroup.add(edgeGroup);
-        ghosts.push({star: starGroup, edge: edgeGroup});
-        if(ghosts.length>MAX_GHOSTS){
-          const g = ghosts.shift();
-          ghostGroup.remove(g.star); ghostGroup.remove(g.edge);
-        }
-      } else {
-        scene.remove(starGroup); scene.remove(edgeGroup);
-      }
+      scene.remove(starGroup); scene.remove(edgeGroup);
       newStar.position.sub(to); newEdge.position.sub(to);
       starGroup = newStar;
       edgeGroup = newEdge;
@@ -575,15 +503,7 @@ async function travelToNeighbor(targetTitle, historyIndex=null){
       controls.target.set(0,0,0);
       camera.position.copy(endOffset);
       visited.add(currentTitle);
-      if(historyIndex != null){
-        pathIndex = historyIndex;
-      } else {
-        PATH.splice(pathIndex+1);
-        PATH.push({ title: currentTitle, pos: newPos });
-        pathIndex++;
-      }
-      previousTitle = PATH[pathIndex-1]? PATH[pathIndex-1].title : null;
-      updateTrail();
+      breadcrumbs.push(currentTitle);
       updateBreadcrumbs();
       hovered = null;
       tooltip.classList.remove('show');
@@ -738,8 +658,8 @@ function confirmPreview(){
   const target = previewTarget;
   closePreview();
   if (previousTitle && target === previousTitle) {
-    if (pathIndex > 0) {
-      travelToNeighbor(previousTitle, pathIndex-1);
+    if (breadcrumbs.length >= 2) {
+      jumpToBreadcrumb(breadcrumbs.length - 2);
     }
   } else {
     travelToNeighbor(target);
@@ -772,14 +692,14 @@ function updateBreadcrumbs(){
   const nav = document.getElementById('breadcrumbs');
   if (!nav) return;
   nav.innerHTML = '';
-  PATH.slice(0, pathIndex+1).forEach((p,i) => {
+  breadcrumbs.forEach((t,i) => {
     const btn = document.createElement('button');
-    btn.textContent = p.title;
-    btn.title = p.title;
+    btn.textContent = t;
+    btn.title = t;
     btn.addEventListener('click', ()=> jumpToBreadcrumb(i));
     btn.addEventListener('keydown', e=>{ if(e.key==='Enter') jumpToBreadcrumb(i); });
     nav.appendChild(btn);
-    if (i < pathIndex) {
+    if (i < breadcrumbs.length - 1) {
       const sep = document.createElement('span');
       sep.textContent = '›';
       nav.appendChild(sep);
@@ -788,28 +708,12 @@ function updateBreadcrumbs(){
 }
 
 function jumpToBreadcrumb(index){
-  const title = PATH[index].title;
-  rebuildStar(title, true);
+  const title = breadcrumbs[index];
+  breadcrumbs = breadcrumbs.slice(0, index+1);
+  updateBreadcrumbs();
+  previousTitle = currentTitle;
+  rebuildStar(title, false);
 }
-
-function navigateHistory(dir){
-  if(previewTarget || isAnimating) return;
-  const newIdx = pathIndex + dir;
-  if(newIdx < 0 || newIdx >= PATH.length) return;
-  const title = PATH[newIdx].title;
-  travelToNeighbor(title, newIdx);
-}
-
-document.addEventListener('keydown', e => {
-  if (e.target.tagName === 'INPUT' || !previewOverlay.classList.contains('hidden')) return;
-  if (e.key === 'ArrowLeft') {
-    e.preventDefault();
-    navigateHistory(-1);
-  } else if (e.key === 'ArrowRight') {
-    e.preventDefault();
-    navigateHistory(1);
-  }
-});
 
 // ====== Hover ======
 function resetHovered(){
@@ -902,18 +806,6 @@ document.getElementById('backToggle').addEventListener('change', (e)=>{
   showBacklinks = e.target.checked;
   if (currentTitle) rebuildStar(currentTitle, false);
 });
-const trailToggle = document.getElementById('trailToggle');
-if(trailToggle){
-  trailToggle.checked = trailEnabled;
-  trailToggle.addEventListener('change', (e)=>{
-    trailEnabled = e.target.checked;
-    try { localStorage.setItem('trailEnabled', trailEnabled ? '1' : '0'); } catch{}
-    if(!trailEnabled){
-      clearGroup(ghostGroup); ghosts.length = 0;
-    }
-    updateTrail();
-  });
-}
 document.getElementById('resetCam').addEventListener('click', ()=>{
   controls.target.set(0,0,0);
   camera.position.copy(DEFAULT_CAM_POS);
@@ -941,11 +833,10 @@ function onGo(){
   document.getElementById('backToggle').checked = false;
   starCache.clear();
   summaryCache.clear();
-  try { const pref = trailEnabled ? '1':'0'; localStorage.clear(); localStorage.setItem('trailEnabled', pref); } catch {}
+  try { localStorage.clear(); } catch {}
   visited.clear();
-  PATH.length = 0; ghosts.length = 0; clearGroup(ghostGroup); pathIndex = -1;
+  breadcrumbs = [];
   previousTitle = null;
-  updateTrail();
   updateBreadcrumbs();
   controls.target.set(0,0,0);
   camera.position.copy(DEFAULT_CAM_POS);
