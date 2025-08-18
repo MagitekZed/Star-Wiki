@@ -380,9 +380,13 @@ function buildStarInto(centerTitle, data, gStar, gEdge, map){
 
   neighbors.forEach((nb, i) => {
     const pos = positionForNeighbor(nb, i, neighbors.length);
-    placeNeighbor(nb, pos, gStar, map);
-    const color = (previousTitle && nb === previousTitle) ? RETURN_COLOR : null;
-    drawRay(centerTitle, nb, new THREE.Vector3(0,0,0), new THREE.Vector3(pos[0], pos[1], pos[2]), i, neighbors.length, gEdge, color);
+    if (previousTitle && nb === previousTitle) {
+      placeReturnNeighbor(nb, pos, gStar, map);
+      drawRay(centerTitle, nb, new THREE.Vector3(0,0,0), new THREE.Vector3(pos[0], pos[1], pos[2]), i, neighbors.length, gEdge, RETURN_COLOR);
+    } else {
+      placeNeighbor(nb, pos, gStar, map);
+      drawRay(centerTitle, nb, new THREE.Vector3(0,0,0), new THREE.Vector3(pos[0], pos[1], pos[2]), i, neighbors.length, gEdge);
+    }
   });
 
   if (previousTitle && !neighbors.includes(previousTitle)) {
@@ -393,7 +397,8 @@ function buildStarInto(centerTitle, data, gStar, gEdge, map){
     drawRay(centerTitle, previousTitle, new THREE.Vector3(0,0,0), new THREE.Vector3(pos[0], pos[1], pos[2]), idx, total, gEdge, RETURN_COLOR);
   }
 
-  updateSidebar(data.center, neighbors);
+  const sidebarNeighbors = neighbors.filter(nb => nb !== previousTitle);
+  updateSidebar(data.center, sidebarNeighbors);
 }
 
 function rebuildStar(title, addTrail=true){
@@ -652,7 +657,13 @@ function confirmPreview(){
   if (!previewTarget) return;
   const target = previewTarget;
   closePreview();
-  travelToNeighbor(target);
+  if (previousTitle && target === previousTitle) {
+    if (breadcrumbs.length >= 2) {
+      jumpToBreadcrumb(breadcrumbs.length - 2);
+    }
+  } else {
+    travelToNeighbor(target);
+  }
 }
 
 function previewKeyHandler(e){
