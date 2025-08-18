@@ -217,6 +217,9 @@ async function getPageStar(title, backlinks=false){
   scored.sort((a,b)=> b.views - a.views || a.title.localeCompare(b.title));
   const neighbors = scored.slice(0,20).map(s=>s.title);
 
+  titles.sort((a,b)=>a.localeCompare(b));
+  const neighbors = titles.slice(0,20);
+
   const star = {
     center: {
       title: canonical,
