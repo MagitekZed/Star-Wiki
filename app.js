@@ -656,6 +656,17 @@ document.getElementById('resetCam').addEventListener('click', ()=>{
   controls.update();
   renderOnce();
 });
+
+const helpModal = document.getElementById('helpModal');
+document.getElementById('helpBtn').addEventListener('click', ()=>{
+  helpModal.classList.remove('hidden');
+});
+document.getElementById('helpClose').addEventListener('click', ()=>{
+  helpModal.classList.add('hidden');
+});
+helpModal.addEventListener('click', (e)=>{
+  if(e.target === helpModal) helpModal.classList.add('hidden');
+});
 function onGo(){
   const val = searchInput.value.trim();
   if (!val) return;
