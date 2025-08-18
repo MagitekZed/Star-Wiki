@@ -152,12 +152,6 @@ function clearGroup(g){
   while (g.children.length) g.remove(g.children.pop());
 }
 
-function clearTrail(){
-  trailGroups.splice(0).forEach(g=> scene.remove(g.group));
-  clearGroup(trailLineGroup);
-  trailLineGroup.position.set(0,0,0);
-}
-
 // ====== Wikipedia adapter ======
 const starCache = new Map();
 const MAX_CACHE = 64;
@@ -316,19 +310,11 @@ async function getPageStar(title, backlinks=false){
 
 // ====== Star building ======
 let currentTitle = null;
-let history = [];
-let currentIndex = -1;
-const centerPositions = [];
-let currentPos = new THREE.Vector3(0,0,0);
+let breadcrumbs = [];
 const visited = new Set();
 let wordToMesh = new Map();
 let showBacklinks = false;
 let previousTitle = null;
-let trailMode = true;
-const trailGroups = [];
-const TRAIL_LIMIT = 5;
-const trailLineGroup = new THREE.Group();
-scene.add(trailLineGroup);
 
 const R_MIN = 8;
 const R_MAX = 40;
@@ -415,7 +401,7 @@ function buildStarInto(centerTitle, data, gStar, gEdge, map){
   updateSidebar(data.center, sidebarNeighbors);
 }
 
-function rebuildStar(title, reset=true){
+function rebuildStar(title, addTrail=true){
   const overlay = document.getElementById('loading');
   const text = document.getElementById('loadingText');
   text.textContent = `Loading ${title}…`;
@@ -429,17 +415,8 @@ function rebuildStar(title, reset=true){
     controls.target.set(0,0,0);
     fadeInGroups();
     visited.add(canonical);
-    if (reset) {
-      history = [canonical];
-      centerPositions.length = 0;
-      centerPositions.push(new THREE.Vector3(0,0,0));
-      currentIndex = 0;
-      previousTitle = null;
-      currentPos.set(0,0,0);
-      clearTrail();
-    }
+    if (addTrail) breadcrumbs.push(canonical);
     updateBreadcrumbs();
-    updateURL();
   }).catch(err => {
     console.error(err);
     overlay.classList.add('hidden');
@@ -449,28 +426,14 @@ function rebuildStar(title, reset=true){
 
 // ====== Travel ======
 let isAnimating = false;
-async function travelTo(targetTitle, to, existingIndex=null){
-  if (isAnimating || !currentTitle) return;
+async function travelToNeighbor(targetTitle){
+  if (isAnimating || !currentTitle || !wordToMesh.has(targetTitle)) return;
   isAnimating = true;
 
-  if (!to) { isAnimating = false; return; }
+  const from = new THREE.Vector3(0,0,0);
+  const to = wordToMesh.get(targetTitle).position.clone();
 
-  if (existingIndex != null) {
-    previousTitle = history[existingIndex - 1] || null;
-  } else {
-    previousTitle = currentTitle;
-    if (currentIndex < history.length - 1) {
-      history = history.slice(0, currentIndex + 1);
-      centerPositions.splice(currentIndex + 1);
-      clearTrail();
-    }
-  }
-
-  const ghostIdx = trailGroups.findIndex(g => g.title === targetTitle);
-  if (ghostIdx >= 0) {
-    scene.remove(trailGroups[ghostIdx].group);
-    trailGroups.splice(ghostIdx, 1);
-  }
+  previousTitle = currentTitle;
 
   const overlay = document.getElementById('loading');
   const text = document.getElementById('loadingText');
@@ -507,7 +470,6 @@ async function travelTo(targetTitle, to, existingIndex=null){
   const endOffset = startOffset.clone().setLength(12);
   const duration = 1400;
   const fadeStart = 0.3;
-  const from = new THREE.Vector3(0,0,0);
   const t0 = performance.now();
   function tick(now){
     const t = Math.min(1, (now - t0) / duration);
@@ -532,69 +494,23 @@ async function travelTo(targetTitle, to, existingIndex=null){
 
     if (t < 1) requestAnimationFrame(tick);
     else {
-      const oldStar = starGroup;
-      const oldEdge = edgeGroup;
-      oldStar.position.sub(to);
-      oldEdge.position.sub(to);
-      newStar.position.sub(to);
-      newEdge.position.sub(to);
-      trailLineGroup.position.sub(to);
-      trailGroups.forEach(g=> g.group.position.sub(to));
-
-      if (trailMode) {
-        const ghost = new THREE.Group();
-        ghost.add(oldStar); ghost.add(oldEdge);
-        ghost.traverse(o=>{ if(o.material && 'opacity' in o.material){ o.material.opacity *= (o.type === 'Line' ? 0.15 : 0.3); o.material.transparent = true; }});
-        scene.add(ghost);
-        trailGroups.push({ title: currentTitle, group: ghost });
-        if (trailGroups.length > TRAIL_LIMIT) {
-          const g = trailGroups.shift();
-          scene.remove(g.group);
-        }
-        const lineGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,0,0), oldStar.position.clone()]);
-        const lineMat = new THREE.LineBasicMaterial({ color: 0x555555, transparent: true, opacity: 0.5 });
-        const trailLine = new THREE.Line(lineGeo, lineMat);
-        trailLineGroup.add(trailLine);
-        if (trailLineGroup.children.length > TRAIL_LIMIT) trailLineGroup.remove(trailLineGroup.children[0]);
-        trailLineGroup.children.forEach((ln,i)=>{
-          ln.material.opacity = 0.15 + (trailLineGroup.children.length - 1 - i) * (0.35 / TRAIL_LIMIT);
-        });
-      } else {
-        scene.remove(oldStar); scene.remove(oldEdge);
-      }
-
+      scene.remove(starGroup); scene.remove(edgeGroup);
+      newStar.position.sub(to); newEdge.position.sub(to);
       starGroup = newStar;
       edgeGroup = newEdge;
       wordToMesh = newMap;
       currentTitle = star.center.title;
       controls.target.set(0,0,0);
       camera.position.copy(endOffset);
-
-      if (existingIndex != null) {
-        currentIndex = existingIndex;
-        currentPos.copy(centerPositions[currentIndex]);
-      } else {
-        currentPos.add(to);
-        centerPositions.push(currentPos.clone());
-        history.push(currentTitle);
-        currentIndex = history.length - 1;
-      }
-      previousTitle = history[currentIndex - 1] || null;
       visited.add(currentTitle);
+      breadcrumbs.push(currentTitle);
       updateBreadcrumbs();
-      updateURL();
       hovered = null;
       tooltip.classList.remove('show');
       isAnimating = false;
     }
   }
   requestAnimationFrame(tick);
-}
-
-function travelToNeighbor(targetTitle){
-  if (!wordToMesh.has(targetTitle)) return;
-  const to = wordToMesh.get(targetTitle).position.clone();
-  travelTo(targetTitle, to);
 }
 
 // ====== Sidebar ======
@@ -741,9 +657,10 @@ function confirmPreview(){
   if (!previewTarget) return;
   const target = previewTarget;
   closePreview();
-  if (previousTitle && target === previousTitle && currentIndex > 0) {
-    const toPos = centerPositions[currentIndex - 1].clone().sub(centerPositions[currentIndex]);
-    travelTo(previousTitle, toPos, currentIndex - 1);
+  if (previousTitle && target === previousTitle) {
+    if (breadcrumbs.length >= 2) {
+      jumpToBreadcrumb(breadcrumbs.length - 2);
+    }
   } else {
     travelToNeighbor(target);
   }
@@ -775,15 +692,14 @@ function updateBreadcrumbs(){
   const nav = document.getElementById('breadcrumbs');
   if (!nav) return;
   nav.innerHTML = '';
-  const show = history.slice(0, currentIndex + 1);
-  show.forEach((t,i) => {
+  breadcrumbs.forEach((t,i) => {
     const btn = document.createElement('button');
     btn.textContent = t;
     btn.title = t;
     btn.addEventListener('click', ()=> jumpToBreadcrumb(i));
     btn.addEventListener('keydown', e=>{ if(e.key==='Enter') jumpToBreadcrumb(i); });
     nav.appendChild(btn);
-    if (i < show.length - 1) {
+    if (i < breadcrumbs.length - 1) {
       const sep = document.createElement('span');
       sep.textContent = '›';
       nav.appendChild(sep);
@@ -792,27 +708,12 @@ function updateBreadcrumbs(){
 }
 
 function jumpToBreadcrumb(index){
-  if (index === currentIndex) return;
-  const toPos = centerPositions[index].clone().sub(centerPositions[currentIndex]);
-  travelTo(history[index], toPos, index);
+  const title = breadcrumbs[index];
+  breadcrumbs = breadcrumbs.slice(0, index+1);
+  updateBreadcrumbs();
+  previousTitle = currentTitle;
+  rebuildStar(title, false);
 }
-
-document.addEventListener('keydown', e=>{
-  if (!previewOverlay.classList.contains('hidden')) return;
-  const tag = document.activeElement?.tagName;
-  if (tag === 'INPUT' || tag === 'TEXTAREA') return;
-  if (e.key === 'ArrowLeft') {
-    if (currentIndex > 0) {
-      const toPos = centerPositions[currentIndex - 1].clone().sub(centerPositions[currentIndex]);
-      travelTo(history[currentIndex - 1], toPos, currentIndex - 1);
-    }
-  } else if (e.key === 'ArrowRight') {
-    if (currentIndex < history.length - 1) {
-      const toPos = centerPositions[currentIndex + 1].clone().sub(centerPositions[currentIndex]);
-      travelTo(history[currentIndex + 1], toPos, currentIndex + 1);
-    }
-  }
-});
 
 // ====== Hover ======
 function resetHovered(){
@@ -905,11 +806,6 @@ document.getElementById('backToggle').addEventListener('change', (e)=>{
   showBacklinks = e.target.checked;
   if (currentTitle) rebuildStar(currentTitle, false);
 });
-document.getElementById('trailToggle').addEventListener('change', (e)=>{
-  trailMode = e.target.checked;
-  if (!trailMode) clearTrail();
-  updateURL();
-});
 document.getElementById('resetCam').addEventListener('click', ()=>{
   controls.target.set(0,0,0);
   camera.position.copy(DEFAULT_CAM_POS);
@@ -939,19 +835,15 @@ function onGo(){
   summaryCache.clear();
   try { localStorage.clear(); } catch {}
   visited.clear();
-  history = [];
-  centerPositions.length = 0;
-  currentIndex = -1;
-  currentPos.set(0,0,0);
+  breadcrumbs = [];
   previousTitle = null;
-  clearTrail();
   updateBreadcrumbs();
   controls.target.set(0,0,0);
   camera.position.copy(DEFAULT_CAM_POS);
   controls.update();
   hovered = null;
   tooltip.classList.remove('show');
-  rebuildStar(val, true);
+  rebuildStar(val);
 }
 
 // ====== Animation ======
@@ -1009,15 +901,6 @@ function animate(){
 }
 function renderOnce(){ renderer.render(scene, camera); }
 
-function updateURL(){
-  const params = new URLSearchParams();
-  if (history[currentIndex]) params.set('center', history[currentIndex]);
-  params.set('mode', showBacklinks ? 'backlinks' : 'outlinks');
-  params.set('trail', trailMode ? '1' : '0');
-  const newUrl = `${location.pathname}?${params.toString()}`;
-  window.history.replaceState({}, '', newUrl);
-}
-
 function showToast(msg){
   const t = document.getElementById('toast');
   if (!t) return;
@@ -1027,23 +910,9 @@ function showToast(msg){
 }
 
 function init(){
-  const params = new URLSearchParams(location.search);
-  const center = params.get('center');
-  const mode = params.get('mode');
-  const trail = params.get('trail');
-  if (mode === 'backlinks') {
-    showBacklinks = true;
-    document.getElementById('backToggle').checked = true;
-  }
-  if (trail === '0') {
-    trailMode = false;
-    document.getElementById('trailToggle').checked = false;
-  }
   document.getElementById('loading').classList.add('hidden');
   updateBreadcrumbs();
   animate();
-  if (center) rebuildStar(center, true);
-  updateURL();
 }
 
 init();
