@@ -11,7 +11,7 @@
 
 * { box-sizing: border-box; }
 
-html, body { margin:0; padding:0; height:100%; width:100%; background:radial-gradient(circle at 50% 0%, #11131a 0%, var(--bg) 100%); color:var(--text); font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji", "Segoe UI Emoji"; }
+html, body { margin:0; padding:0; height:100%; width:100%; overflow-x:hidden; background:radial-gradient(circle at 50% 0%, #11131a 0%, var(--bg) 100%); color:var(--text); font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji", "Segoe UI Emoji"; }
 
 header { padding:12px 16px; border-bottom:1px solid #23283b; background:linear-gradient(90deg,#11131a,#171b26); display:flex; gap:12px; align-items:center; flex-wrap:wrap; box-shadow:0 2px 4px rgba(0,0,0,0.4); }
 header h1 { margin:0 12px 0 0; font-size:18px; color:var(--accent); }
@@ -29,7 +29,7 @@ header h1 { margin:0 12px 0 0; font-size:18px; color:var(--accent); }
 #summary { font-size:13px; color:var(--muted); margin-bottom:8px; }
 #summary img { width:100%; max-height:120px; object-fit:cover; border-radius:6px; margin-bottom:6px; }
 
-main { display:grid; grid-template-columns: 1fr 300px; height: calc(100vh - 110px); }
+main { display:grid; grid-template-columns: 1fr 330px; height: calc(100vh - 110px); }
 #canvas { position:relative; background:radial-gradient(circle at center, #0c0e17, #05060b); }
 #info { border-left:1px solid #23283b; padding:12px; background:#0f1220; overflow:auto; box-shadow:-2px 0 4px rgba(0,0,0,0.4); }
 #currentWord { margin:6px 0 8px; font-size:16px; }
