@@ -68,6 +68,18 @@ const materialNeighborHover = new THREE.SpriteMaterial({
   blending: THREE.AdditiveBlending,
   transparent: true
 });
+const materialBackNeighbor = new THREE.SpriteMaterial({
+  map: starTexture,
+  color: 0xffd700,
+  blending: THREE.AdditiveBlending,
+  transparent: true
+});
+const materialBackNeighborHover = new THREE.SpriteMaterial({
+  map: starTexture,
+  color: 0xffe580,
+  blending: THREE.AdditiveBlending,
+  transparent: true
+});
 const materialVisited = new THREE.SpriteMaterial({
   map: starTexture,
   color: 0x4b5563,
@@ -139,7 +151,7 @@ async function fetchPageViews(title){
   const start = new Date(end);
   start.setUTCMonth(start.getUTCMonth() - 1);
   const fmt = d => d.toISOString().slice(0,10).replace(/-/g,'');
-  const url = `https://wikimedia.org/api/rest_v1/metrics/pageviews/per-article/en.wikipedia/all-access/user/${encodeURIComponent(title)}/daily/${fmt(start)}/${fmt(end)}`;
+  const url = `https://wikimedia.org/api/rest_v1/metrics/pageviews/per-article/en.wikipedia/all-access/user/${encodeURIComponent(title)}/daily/${fmt(start)}/${fmt(end)}?origin=*`;
   let views = 0;
   try {
     const res = await wikiFetch(url);
@@ -259,7 +271,9 @@ function opacityFromRank(rank, total){
 }
 
 function placeNeighbor(title, posArray, group = starGroup, map = wordToMesh){
-  const baseMat = visited.has(title) ? materialVisited : materialNeighbor;
+  const baseMat = visited.has(title)
+    ? materialVisited
+    : (showBacklinks ? materialBackNeighbor : materialNeighbor);
   const mesh = new THREE.Sprite(baseMat.clone());
   mesh.position.set(posArray[0], posArray[1], posArray[2]);
   mesh.userData = { title, kind: 'neighbor', baseScale: 1.2 };
@@ -271,7 +285,12 @@ function placeNeighbor(title, posArray, group = starGroup, map = wordToMesh){
 
 function drawRay(centerTitle, targetTitle, startVec3, endVec3, rank, total, group = edgeGroup){
   const geo = new THREE.BufferGeometry().setFromPoints([startVec3, endVec3]);
-  const mat = new THREE.LineBasicMaterial({ color: 0x7aa2f7, transparent: true, opacity: opacityFromRank(rank, total), linewidth: 2 });
+  const mat = new THREE.LineBasicMaterial({
+    color: showBacklinks ? 0xffd700 : 0x7aa2f7,
+    transparent: true,
+    opacity: opacityFromRank(rank, total),
+    linewidth: 2
+  });
   const line = new THREE.Line(geo, mat);
   const mid = startVec3.clone().add(endVec3).multiplyScalar(0.5);
   line.userData = { center: centerTitle, title: targetTitle, kind: 'ray', normalMat: mat, mid };
@@ -535,7 +554,9 @@ function resetHovered(){
   if (!hovered) return;
   const obj = hovered.object;
   if (obj.userData.kind === 'neighbor') {
-    const baseMat = visited.has(obj.userData.title) ? materialVisited : materialNeighbor;
+    const baseMat = visited.has(obj.userData.title)
+      ? materialVisited
+      : (showBacklinks ? materialBackNeighbor : materialNeighbor);
     obj.material = baseMat.clone();
     if(obj.userData.baseScale) obj.scale.set(obj.userData.baseScale, obj.userData.baseScale, 1);
   } else if (obj.userData.normalMat) {
@@ -555,7 +576,7 @@ function updateHover(){
     const obj = first.object;
     tooltip.classList.add('show');
     if (obj.userData.kind === 'neighbor') {
-      obj.material = materialNeighborHover.clone();
+      obj.material = (showBacklinks ? materialBackNeighborHover : materialNeighborHover).clone();
       if(obj.userData.baseScale) obj.scale.set(obj.userData.baseScale * 1.25, obj.userData.baseScale * 1.25, 1);
       const v = obj.position.clone().project(camera);
       const x = (v.x * 0.5 + 0.5) * renderer.domElement.clientWidth;
