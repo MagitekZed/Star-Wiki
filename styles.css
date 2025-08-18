@@ -40,6 +40,7 @@ main { display:grid; grid-template-columns: 1fr 300px; height: calc(100vh - 110p
 .neighbor { display:flex; gap:6px; align-items:flex-start; padding:6px; background:var(--panel); border:1px solid #23283b; border-radius:8px; cursor:pointer; }
 .neighbor:focus { outline:2px solid var(--accent); }
 .neighbor.visited { opacity:0.6; }
+.neighbor.return { border-color:var(--danger); color:var(--danger); justify-content:center; align-items:center; }
 .neighbor .thumb { width:40px; height:40px; object-fit:cover; border-radius:4px; background:#23283b; flex-shrink:0; }
 .neighbor .meta { flex:1; overflow:hidden; }
 .neighbor .title { font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }

@@ -94,6 +94,19 @@ const materialVisited = new THREE.SpriteMaterial({
   blending: THREE.AdditiveBlending,
   transparent: true
 });
+const RETURN_COLOR = 0xf7768e;
+const materialReturnNeighbor = new THREE.SpriteMaterial({
+  map: starTexture,
+  color: RETURN_COLOR,
+  blending: THREE.AdditiveBlending,
+  transparent: true
+});
+const materialReturnNeighborHover = new THREE.SpriteMaterial({
+  map: starTexture,
+  color: 0xffa0b3,
+  blending: THREE.AdditiveBlending,
+  transparent: true
+});
 const materialRayHover = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 1, linewidth: 2 });
 
 // ====== Interaction ======
@@ -301,6 +314,7 @@ let breadcrumbs = [];
 const visited = new Set();
 let wordToMesh = new Map();
 let showBacklinks = false;
+let previousTitle = null;
 
 const R_MIN = 8;
 const R_MAX = 40;
@@ -329,12 +343,23 @@ function placeNeighbor(title, posArray, group = starGroup, map = wordToMesh){
   return mesh;
 }
 
-function drawRay(centerTitle, targetTitle, startVec3, endVec3, rank, total, group = edgeGroup){
+function placeReturnNeighbor(title, posArray, group = starGroup, map = wordToMesh){
+  const mesh = new THREE.Sprite(materialReturnNeighbor.clone());
+  mesh.position.set(posArray[0], posArray[1], posArray[2]);
+  mesh.userData = { title, kind: 'neighbor', baseScale: 1.2, isReturn: true };
+  mesh.scale.set(1.2, 1.2, 1);
+  group.add(mesh);
+  map.set(title, mesh);
+  return mesh;
+}
+
+function drawRay(centerTitle, targetTitle, startVec3, endVec3, rank, total, group = edgeGroup, colorOverride=null){
   const geo = new THREE.BufferGeometry().setFromPoints([startVec3, endVec3]);
+  const lineOpacity = colorOverride ? 1 : opacityFromRank(rank, total);
   const mat = new THREE.LineBasicMaterial({
-    color: showBacklinks ? 0xffd700 : 0x7aa2f7,
+    color: colorOverride || (showBacklinks ? 0xffd700 : 0x7aa2f7),
     transparent: true,
-    opacity: opacityFromRank(rank, total),
+    opacity: lineOpacity,
     linewidth: 2
   });
   const line = new THREE.Line(geo, mat);
@@ -356,8 +381,17 @@ function buildStarInto(centerTitle, data, gStar, gEdge, map){
   neighbors.forEach((nb, i) => {
     const pos = positionForNeighbor(nb, i, neighbors.length);
     placeNeighbor(nb, pos, gStar, map);
-    drawRay(centerTitle, nb, new THREE.Vector3(0,0,0), new THREE.Vector3(pos[0], pos[1], pos[2]), i, neighbors.length, gEdge);
+    const color = (previousTitle && nb === previousTitle) ? RETURN_COLOR : null;
+    drawRay(centerTitle, nb, new THREE.Vector3(0,0,0), new THREE.Vector3(pos[0], pos[1], pos[2]), i, neighbors.length, gEdge, color);
   });
+
+  if (previousTitle && !neighbors.includes(previousTitle)) {
+    const idx = neighbors.length;
+    const total = neighbors.length + 1;
+    const pos = positionForNeighbor(previousTitle, idx, total);
+    placeReturnNeighbor(previousTitle, pos, gStar, map);
+    drawRay(centerTitle, previousTitle, new THREE.Vector3(0,0,0), new THREE.Vector3(pos[0], pos[1], pos[2]), idx, total, gEdge, RETURN_COLOR);
+  }
 
   updateSidebar(data.center, neighbors);
 }
@@ -393,6 +427,8 @@ async function travelToNeighbor(targetTitle){
 
   const from = new THREE.Vector3(0,0,0);
   const to = wordToMesh.get(targetTitle).position.clone();
+
+  previousTitle = currentTitle;
 
   const overlay = document.getElementById('loading');
   const text = document.getElementById('loadingText');
@@ -499,6 +535,15 @@ function updateSidebar(center, neighbors){
 
   const container = document.getElementById('neighbors');
   container.innerHTML = '';
+  if (previousTitle) {
+    const backRow = document.createElement('div');
+    backRow.className = 'neighbor return';
+    backRow.tabIndex = 0;
+    backRow.textContent = `Back to ${previousTitle}`;
+    backRow.addEventListener('click', e=> openPreview(previousTitle, e.clientX, e.clientY));
+    backRow.addEventListener('keydown', e=>{ if(e.key==='Enter') openPreview(previousTitle); });
+    container.appendChild(backRow);
+  }
   neighbors.forEach(nb => {
     const row = document.createElement('div');
     row.className = 'neighbor';
@@ -655,6 +700,7 @@ function jumpToBreadcrumb(index){
   const title = breadcrumbs[index];
   breadcrumbs = breadcrumbs.slice(0, index+1);
   updateBreadcrumbs();
+  previousTitle = currentTitle;
   rebuildStar(title, false);
 }
 
@@ -663,10 +709,14 @@ function resetHovered(){
   if (!hovered) return;
   const obj = hovered.object;
   if (obj.userData.kind === 'neighbor') {
-    const baseMat = visited.has(obj.userData.title)
-      ? materialVisited
-      : (showBacklinks ? materialBackNeighbor : materialNeighbor);
-    obj.material = baseMat.clone();
+    if (obj.userData.isReturn) {
+      obj.material = materialReturnNeighbor.clone();
+    } else {
+      const baseMat = visited.has(obj.userData.title)
+        ? materialVisited
+        : (showBacklinks ? materialBackNeighbor : materialNeighbor);
+      obj.material = baseMat.clone();
+    }
     if(obj.userData.baseScale) obj.scale.set(obj.userData.baseScale, obj.userData.baseScale, 1);
   } else if (obj.userData.normalMat) {
     obj.material = obj.userData.normalMat;
@@ -685,7 +735,11 @@ function updateHover(){
     const obj = first.object;
     tooltip.classList.add('show');
     if (obj.userData.kind === 'neighbor') {
-      obj.material = (showBacklinks ? materialBackNeighborHover : materialNeighborHover).clone();
+      if (obj.userData.isReturn) {
+        obj.material = materialReturnNeighborHover.clone();
+      } else {
+        obj.material = (showBacklinks ? materialBackNeighborHover : materialNeighborHover).clone();
+      }
       if(obj.userData.baseScale) obj.scale.set(obj.userData.baseScale * 1.25, obj.userData.baseScale * 1.25, 1);
       const v = obj.position.clone().project(camera);
       const x = (v.x * 0.5 + 0.5) * renderer.domElement.clientWidth;
@@ -761,6 +815,23 @@ helpModal.addEventListener('click', (e)=>{
 function onGo(){
   const val = searchInput.value.trim();
   if (!val) return;
+  closePreview();
+  const help = document.getElementById('helpModal');
+  if (help) help.classList.add('hidden');
+  showBacklinks = false;
+  document.getElementById('backToggle').checked = false;
+  starCache.clear();
+  summaryCache.clear();
+  try { localStorage.clear(); } catch {}
+  visited.clear();
+  breadcrumbs = [];
+  previousTitle = null;
+  updateBreadcrumbs();
+  controls.target.set(0,0,0);
+  camera.position.copy(DEFAULT_CAM_POS);
+  controls.update();
+  hovered = null;
+  tooltip.classList.remove('show');
   rebuildStar(val);
 }
 
