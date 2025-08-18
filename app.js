@@ -130,28 +130,46 @@ async function getPageStar(title){
     starCache.delete(title); starCache.set(title, v);
     return v;
   }
-  let cont;
-  const linksSet = new Set();
-  let pageid = null;
-  let canonical = null;
-  do {
-    const url = `https://en.wikipedia.org/w/api.php?action=query&prop=links&plnamespace=0&pllimit=max&redirects=1&origin=*&titles=${encodeURIComponent(title)}${cont ? `&plcontinue=${encodeURIComponent(cont)}`:''}&format=json`;
-    const res = await wikiFetch(url);
-    const data = await res.json();
-    const pages = data.query.pages;
-    const page = pages[Object.keys(pages)[0]];
-    canonical = page.title;
-    pageid = page.pageid;
-    if (page.links) {
-      for (const l of page.links) {
-        if (l.title !== canonical) linksSet.add(l.title);
-        if (linksSet.size >= 20) break;
+  function normalizeTitle(str){
+    const cleaned = str.replace(/_/g, ' ').trim();
+    if (!cleaned) return '';
+    return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+  }
+  // Fetch wikitext and link list for the page in a single request
+  const parseUrl = `https://en.wikipedia.org/w/api.php?action=parse&page=${encodeURIComponent(title)}&prop=wikitext|links&redirects=1&origin=*&format=json`;
+  const res = await wikiFetch(parseUrl);
+  const data = await res.json();
+  const canonical = data.parse.title;
+  const pageid = data.parse.pageid;
+  const wikitext = data.parse.wikitext?.['*'] || '';
+
+  // Map of normalized link -> canonical title for articles in namespace 0
+  const normMap = new Map();
+  if (data.parse.links) {
+    for (const l of data.parse.links) {
+      if (l.ns === 0 && l['*'] !== canonical) {
+        const norm = normalizeTitle(l['*']);
+        normMap.set(norm, l['*']);
       }
     }
-    cont = data.continue && data.continue.plcontinue;
-  } while (cont && linksSet.size < 20);
+  }
 
-  const neighbors = [...linksSet].sort((a,b)=>a.localeCompare(b)).slice(0,20);
+  // Count occurrences of each link in the wikitext
+  const counts = new Map();
+  const linkRe = /\[\[([^|\[\]]+)(?:\|[^\]]*)?\]\]/g;
+  let m;
+  while ((m = linkRe.exec(wikitext)) !== null) {
+    let target = m[1].split('#')[0];
+    const norm = normalizeTitle(target);
+    if (!normMap.has(norm)) continue;
+    const canon = normMap.get(norm);
+    counts.set(canon, (counts.get(canon) || 0) + 1);
+  }
+
+  const neighbors = [...counts.entries()]
+    .sort((a,b) => b[1] - a[1])
+    .slice(0,20)
+    .map(([t]) => t);
 
   let summaryData = null;
   try {
