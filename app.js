@@ -122,34 +122,12 @@ const MAX_CACHE = 64;
 let lastFetch = 0;
 const FETCH_DELAY = 250;
 
-const viewCache = new Map();
-
 async function wikiFetch(url){
   const now = Date.now();
   const wait = Math.max(0, lastFetch + FETCH_DELAY - now);
   if (wait) await new Promise(r=>setTimeout(r, wait));
   lastFetch = Date.now();
   return fetch(url, { headers: { 'Api-User-Agent': 'StarWiki/1.0 (https://example.com)' } });
-}
-
-async function fetchPageViews(title){
-  if (viewCache.has(title)) return viewCache.get(title);
-  const end = new Date();
-  end.setUTCDate(end.getUTCDate() - 1);
-  const start = new Date(end);
-  start.setUTCMonth(start.getUTCMonth() - 1);
-  const fmt = d => d.toISOString().slice(0,10).replace(/-/g,'');
-  const url = `https://wikimedia.org/api/rest_v1/metrics/pageviews/per-article/en.wikipedia/all-access/user/${encodeURIComponent(title)}/daily/${fmt(start)}/${fmt(end)}`;
-  let views = 0;
-  try {
-    const res = await wikiFetch(url);
-    if (res.ok) {
-      const data = await res.json();
-      if (data.items) views = data.items.reduce((s,it)=>s+it.views,0);
-    }
-  } catch {}
-  viewCache.set(title, views);
-  return views;
 }
 
 async function getPageStar(title, backlinks=false){
@@ -213,9 +191,6 @@ async function getPageStar(title, backlinks=false){
       } while (cont && titles.length < 50);
     }
   } catch {}
-  const scored = await Promise.all(titles.map(async t => ({ title: t, views: await fetchPageViews(t) })));
-  scored.sort((a,b)=> b.views - a.views || a.title.localeCompare(b.title));
-  const neighbors = scored.slice(0,20).map(s=>s.title);
 
   titles.sort((a,b)=>a.localeCompare(b));
   const neighbors = titles.slice(0,20);
