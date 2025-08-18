@@ -310,14 +310,18 @@ async function getPageStar(title, backlinks=false){
 
 // ====== Star building ======
 let currentTitle = null;
-let breadcrumbs = [];
+let history = [];
+let historyIndex = -1;
 const visited = new Set();
 let wordToMesh = new Map();
 let showBacklinks = false;
-let previousTitle = null;
 
 const R_MIN = 8;
 const R_MAX = 40;
+
+function getChainPrev(){
+  return historyIndex > 0 ? history[historyIndex - 1] : null;
+}
 
 function positionForNeighbor(title, index, total){
   const dir = directionFromTitle(title);
@@ -377,10 +381,11 @@ function buildStarInto(centerTitle, data, gStar, gEdge, map){
   map.set(centerTitle, centerMesh);
 
   const neighbors = data.neighbors.slice(0,20);
+  const chainPrev = getChainPrev();
 
   neighbors.forEach((nb, i) => {
     const pos = positionForNeighbor(nb, i, neighbors.length);
-    if (previousTitle && nb === previousTitle) {
+    if (chainPrev && nb === chainPrev) {
       placeReturnNeighbor(nb, pos, gStar, map);
       drawRay(centerTitle, nb, new THREE.Vector3(0,0,0), new THREE.Vector3(pos[0], pos[1], pos[2]), i, neighbors.length, gEdge, RETURN_COLOR);
     } else {
@@ -389,51 +394,57 @@ function buildStarInto(centerTitle, data, gStar, gEdge, map){
     }
   });
 
-  if (previousTitle && !neighbors.includes(previousTitle)) {
+  if (chainPrev && !neighbors.includes(chainPrev)) {
     const idx = neighbors.length;
     const total = neighbors.length + 1;
-    const pos = positionForNeighbor(previousTitle, idx, total);
-    placeReturnNeighbor(previousTitle, pos, gStar, map);
-    drawRay(centerTitle, previousTitle, new THREE.Vector3(0,0,0), new THREE.Vector3(pos[0], pos[1], pos[2]), idx, total, gEdge, RETURN_COLOR);
+    const pos = positionForNeighbor(chainPrev, idx, total);
+    placeReturnNeighbor(chainPrev, pos, gStar, map);
+    drawRay(centerTitle, chainPrev, new THREE.Vector3(0,0,0), new THREE.Vector3(pos[0], pos[1], pos[2]), idx, total, gEdge, RETURN_COLOR);
   }
 
-  const sidebarNeighbors = neighbors.filter(nb => nb !== previousTitle);
-  updateSidebar(data.center, sidebarNeighbors);
+  const sidebarNeighbors = neighbors.filter(nb => nb !== chainPrev);
+  updateSidebar(data.center, sidebarNeighbors, chainPrev);
 }
 
-function rebuildStar(title, addTrail=true){
+function rebuildStar(title, addToHistory=true){
   const overlay = document.getElementById('loading');
   const text = document.getElementById('loadingText');
   text.textContent = `Loading ${title}…`;
   overlay.classList.remove('hidden');
-  getPageStar(title, showBacklinks).then(star => {
+  return getPageStar(title, showBacklinks).then(star => {
     overlay.classList.add('hidden');
     const canonical = star.center.title;
+    if (addToHistory) {
+      if (historyIndex < history.length - 1) history = history.slice(0, historyIndex + 1);
+      history.push(canonical);
+      historyIndex = history.length - 1;
+    } else {
+      history[historyIndex] = canonical;
+    }
     clearGroup(starGroup); clearGroup(edgeGroup); wordToMesh.clear();
     buildStarInto(canonical, star, starGroup, edgeGroup, wordToMesh);
     currentTitle = canonical;
     controls.target.set(0,0,0);
     fadeInGroups();
     visited.add(canonical);
-    if (addTrail) breadcrumbs.push(canonical);
     updateBreadcrumbs();
+    isAnimating = false;
   }).catch(err => {
     console.error(err);
     overlay.classList.add('hidden');
     showToast('Failed to load page.');
+    isAnimating = false;
   });
 }
 
 // ====== Travel ======
 let isAnimating = false;
-async function travelToNeighbor(targetTitle){
+async function travelToNeighbor(targetTitle, addToHistory=true){
   if (isAnimating || !currentTitle || !wordToMesh.has(targetTitle)) return;
   isAnimating = true;
 
   const from = new THREE.Vector3(0,0,0);
   const to = wordToMesh.get(targetTitle).position.clone();
-
-  previousTitle = currentTitle;
 
   const overlay = document.getElementById('loading');
   const text = document.getElementById('loadingText');
@@ -450,10 +461,19 @@ async function travelToNeighbor(targetTitle){
   }
   overlay.classList.add('hidden');
 
+  const canonical = star.center.title;
+  if (addToHistory) {
+    if (historyIndex < history.length - 1) history = history.slice(0, historyIndex + 1);
+    history.push(canonical);
+    historyIndex = history.length - 1;
+  } else {
+    history[historyIndex] = canonical;
+  }
+
   const newStar = new THREE.Group();
   const newEdge = new THREE.Group();
   const newMap = new Map();
-  buildStarInto(star.center.title, star, newStar, newEdge, newMap);
+  buildStarInto(canonical, star, newStar, newEdge, newMap);
   newStar.position.copy(to);
   newEdge.position.copy(to);
   scene.add(newStar);
@@ -503,7 +523,6 @@ async function travelToNeighbor(targetTitle){
       controls.target.set(0,0,0);
       camera.position.copy(endOffset);
       visited.add(currentTitle);
-      breadcrumbs.push(currentTitle);
       updateBreadcrumbs();
       hovered = null;
       tooltip.classList.remove('show');
@@ -514,7 +533,7 @@ async function travelToNeighbor(targetTitle){
 }
 
 // ====== Sidebar ======
-function updateSidebar(center, neighbors){
+function updateSidebar(center, neighbors, chainPrev){
   const heading = document.getElementById('currentWord');
   heading.textContent = center.title;
 
@@ -540,13 +559,13 @@ function updateSidebar(center, neighbors){
 
   const container = document.getElementById('neighbors');
   container.innerHTML = '';
-  if (previousTitle) {
+  if (chainPrev) {
     const backRow = document.createElement('div');
     backRow.className = 'neighbor return';
     backRow.tabIndex = 0;
-    backRow.textContent = `Back to ${previousTitle}`;
-    backRow.addEventListener('click', e=> openPreview(previousTitle, e.clientX, e.clientY));
-    backRow.addEventListener('keydown', e=>{ if(e.key==='Enter') openPreview(previousTitle); });
+    backRow.textContent = `Back to ${chainPrev}`;
+    backRow.addEventListener('click', e=> openPreview(chainPrev, e.clientX, e.clientY));
+    backRow.addEventListener('keydown', e=>{ if(e.key==='Enter') openPreview(chainPrev); });
     container.appendChild(backRow);
   }
   neighbors.forEach(nb => {
@@ -656,10 +675,12 @@ function closePreview(){
 function confirmPreview(){
   if (!previewTarget) return;
   const target = previewTarget;
+  const chainPrev = getChainPrev();
   closePreview();
-  if (previousTitle && target === previousTitle) {
-    if (breadcrumbs.length >= 2) {
-      jumpToBreadcrumb(breadcrumbs.length - 2);
+  if (chainPrev && target === chainPrev) {
+    if (historyIndex > 0) {
+      historyIndex--;
+      travelToNeighbor(target, false);
     }
   } else {
     travelToNeighbor(target);
@@ -692,14 +713,15 @@ function updateBreadcrumbs(){
   const nav = document.getElementById('breadcrumbs');
   if (!nav) return;
   nav.innerHTML = '';
-  breadcrumbs.forEach((t,i) => {
+  history.forEach((t,i) => {
     const btn = document.createElement('button');
     btn.textContent = t;
     btn.title = t;
+    if (i === historyIndex) btn.classList.add('active');
     btn.addEventListener('click', ()=> jumpToBreadcrumb(i));
     btn.addEventListener('keydown', e=>{ if(e.key==='Enter') jumpToBreadcrumb(i); });
     nav.appendChild(btn);
-    if (i < breadcrumbs.length - 1) {
+    if (i < history.length - 1) {
       const sep = document.createElement('span');
       sep.textContent = '›';
       nav.appendChild(sep);
@@ -708,11 +730,9 @@ function updateBreadcrumbs(){
 }
 
 function jumpToBreadcrumb(index){
-  const title = breadcrumbs[index];
-  breadcrumbs = breadcrumbs.slice(0, index+1);
-  updateBreadcrumbs();
-  previousTitle = currentTitle;
-  rebuildStar(title, false);
+  if (index === historyIndex) return;
+  historyIndex = index;
+  rebuildStar(history[index], false);
 }
 
 // ====== Hover ======
@@ -823,6 +843,42 @@ document.getElementById('helpClose').addEventListener('click', ()=>{
 helpModal.addEventListener('click', (e)=>{
   if(e.target === helpModal) helpModal.classList.add('hidden');
 });
+
+document.addEventListener('keydown', e => {
+  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+  if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+  const active = document.activeElement;
+  if (active && ['INPUT','TEXTAREA','SELECT'].includes(active.tagName)) return;
+  if (!previewOverlay.classList.contains('hidden')) closePreview();
+  if (helpModal && !helpModal.classList.contains('hidden')) helpModal.classList.add('hidden');
+  if (e.key === 'ArrowLeft') {
+    if (historyIndex > 0 && !isAnimating) {
+      const newIndex = historyIndex - 1;
+      const target = history[newIndex];
+      historyIndex = newIndex;
+      if (wordToMesh.has(target)) {
+        travelToNeighbor(target, false);
+      } else {
+        isAnimating = true;
+        rebuildStar(target, false);
+      }
+      e.preventDefault();
+    }
+  } else if (e.key === 'ArrowRight') {
+    if (historyIndex < history.length - 1 && !isAnimating) {
+      const newIndex = historyIndex + 1;
+      const target = history[newIndex];
+      historyIndex = newIndex;
+      if (wordToMesh.has(target)) {
+        travelToNeighbor(target, false);
+      } else {
+        isAnimating = true;
+        rebuildStar(target, false);
+      }
+      e.preventDefault();
+    }
+  }
+});
 function onGo(){
   const val = searchInput.value.trim();
   if (!val) return;
@@ -835,8 +891,8 @@ function onGo(){
   summaryCache.clear();
   try { localStorage.clear(); } catch {}
   visited.clear();
-  breadcrumbs = [];
-  previousTitle = null;
+  history = [];
+  historyIndex = -1;
   updateBreadcrumbs();
   controls.target.set(0,0,0);
   camera.position.copy(DEFAULT_CAM_POS);
