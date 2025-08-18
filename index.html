@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>WordSpace • Semantic Starfield</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="loading" class="overlay"><span id="loadingText">Loading dataset…</span></div>
+    <header>
+      <h1>WordSpace • Semantic Starfield</h1>
+      <div class="controls">
+        <input id="search" type="text" placeholder="Type a word to center (e.g., apple)" list="wordlist" />
+        <datalist id="wordlist"></datalist>
+        <button id="goBtn">Re-center</button>
+        <label class="toggle"><input id="showFar" type="checkbox" checked /> Contrast rays</label>
+      </div>
+      <div class="legend">
+        <span class="dot similar"></span> Blue rays = related words
+        <span class="dot contrast"></span> Red dashed rays = distant contrasts
+      </div>
+    </header>
+
+    <main>
+      <div id="canvas"></div>
+      <aside id="info">
+        <h2 id="currentWord">Select a word</h2>
+        <div class="hint">Hover a ray to see its word; click to travel. Scroll to zoom. Drag to orbit.</div>
+        <div id="neighbors"></div>
+      </aside>
+    </main>
+
+    <footer>
+      <small id="datasetMeta"></small>
+    </footer>
+
+    <div id="toast" class="toast"></div>
+
+    <script type="module" src="app.js"></script>
+  </body>
+</html>
