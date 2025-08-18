@@ -43,6 +43,14 @@ const tooltip = document.createElement('div');
 tooltip.className = 'tooltip';
 container.appendChild(tooltip);
 
+const previewOverlay = document.getElementById('previewOverlay');
+const previewModal = document.getElementById('previewModal');
+const previewBody = document.getElementById('previewBody');
+const previewTitle = document.getElementById('previewTitle');
+const previewExtract = document.getElementById('previewExtract');
+const previewThumb = document.getElementById('previewThumb');
+const previewLink = document.getElementById('previewLink');
+
 // ====== Star groups ======
 let starGroup = new THREE.Group();
 let edgeGroup = new THREE.Group();
@@ -93,6 +101,7 @@ const raycaster = new THREE.Raycaster();
 raycaster.params.Line.threshold = 0.1;
 const mouse = new THREE.Vector2();
 let hovered = null;
+let previewTarget = null;
 
 container.addEventListener('mousemove', (e)=>{
   const rect = renderer.domElement.getBoundingClientRect();
@@ -100,10 +109,12 @@ container.addEventListener('mousemove', (e)=>{
   mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
 });
 
-container.addEventListener('click', ()=>{
+container.addEventListener('click', (e)=>{
   if (hovered && hovered.object && hovered.object.userData && hovered.object.userData.title && hovered.object.userData.kind !== 'center') {
     const toTitle = hovered.object.userData.title;
-    travelToNeighbor(toTitle);
+    openPreview(toTitle, e.clientX, e.clientY);
+  } else if (previewTarget) {
+    closePreview();
   }
 });
 
@@ -133,6 +144,7 @@ const starCache = new Map();
 const MAX_CACHE = 64;
 let lastFetch = 0;
 const FETCH_DELAY = 250;
+const summaryCache = new Map();
 
 async function wikiFetch(url){
   const now = Date.now();
@@ -140,6 +152,22 @@ async function wikiFetch(url){
   if (wait) await new Promise(r=>setTimeout(r, wait));
   lastFetch = Date.now();
   return fetch(url, { headers: { 'Api-User-Agent': 'StarWiki/1.0 (https://example.com)' } });
+}
+
+async function fetchSummary(title){
+  if (summaryCache.has(title)) return summaryCache.get(title);
+  const info = { title, extract: '', thumbnail: null };
+  summaryCache.set(title, info);
+  try {
+    const res = await wikiFetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.title) info.title = data.title;
+      if (data.extract) info.extract = data.extract;
+      if (data.thumbnail?.source) info.thumbnail = data.thumbnail.source;
+    }
+  } catch {}
+  return info;
 }
 
 async function normalizeTitle(title){
@@ -467,6 +495,7 @@ function updateSidebar(center, neighbors){
   link.target = '_blank';
   link.textContent = 'View on Wikipedia';
   summaryDiv.appendChild(link);
+  summaryCache.set(center.title, { title: center.title, extract: center.summary || '', thumbnail: center.thumbnailUrl || null });
 
   const container = document.getElementById('neighbors');
   container.innerHTML = '';
@@ -475,8 +504,8 @@ function updateSidebar(center, neighbors){
     row.className = 'neighbor';
     row.tabIndex = 0;
     if (visited.has(nb)) row.classList.add('visited');
-    row.addEventListener('click', ()=> travelToNeighbor(nb));
-    row.addEventListener('keydown', e=>{ if(e.key==='Enter') travelToNeighbor(nb); });
+    row.addEventListener('click', e=> openPreview(nb, e.clientX, e.clientY));
+    row.addEventListener('keydown', e=>{ if(e.key==='Enter') openPreview(nb); });
 
     const img = document.createElement('img');
     img.className = 'thumb';
@@ -502,6 +531,7 @@ function updateSidebar(center, neighbors){
     ext.textContent = '↗';
     ext.setAttribute('aria-label', 'Open on Wikipedia');
     ext.addEventListener('click', e=> e.stopPropagation());
+    ext.addEventListener('keydown', e=> e.stopPropagation());
     row.appendChild(ext);
 
     container.appendChild(row);
@@ -516,30 +546,91 @@ function updateSidebar(center, neighbors){
 }
 
 async function fetchNeighborInfo(title, row){
-  const cached = starCache.get(`out|${title}`) || starCache.get(`back|${title}`);
-  if (cached) {
-    const img = row.querySelector('img.thumb');
-    if (cached.center.thumbnailUrl) img.src = cached.center.thumbnailUrl;
-    const ex = row.querySelector('.extract');
-    if (cached.center.summary) {
-      const first = cached.center.summary.split('. ')[0];
-      ex.textContent = first.endsWith('.') ? first : first + '.';
-    }
-    return;
+  const data = await fetchSummary(title);
+  const img = row.querySelector('img.thumb');
+  if (data.thumbnail) img.src = data.thumbnail;
+  const ex = row.querySelector('.extract');
+  if (data.extract) {
+    const first = data.extract.split('. ')[0];
+    ex.textContent = first.endsWith('.') ? first : first + '.';
   }
-  try {
-    const res = await wikiFetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`);
-    if (!res.ok) return;
-    const data = await res.json();
-    const img = row.querySelector('img.thumb');
-    if (data.thumbnail?.source) img.src = data.thumbnail.source;
-    const ex = row.querySelector('.extract');
-    if (data.extract) {
-      const first = data.extract.split('. ')[0];
-      ex.textContent = first.endsWith('.') ? first : first + '.';
-    }
-  } catch {}
 }
+
+// ====== Preview modal ======
+function positionPreview(x, y){
+  previewModal.style.transform = '';
+  if (x == null || y == null || window.innerWidth < 600) {
+    previewModal.style.left = '50%';
+    previewModal.style.top = '50%';
+    previewModal.style.transform = 'translate(-50%, -50%)';
+  } else {
+    const rect = previewModal.getBoundingClientRect();
+    let left = x + 12;
+    let top = y + 12;
+    if (left + rect.width > window.innerWidth) left = x - rect.width - 12;
+    if (top + rect.height > window.innerHeight) top = y - rect.height - 12;
+    previewModal.style.left = left + 'px';
+    previewModal.style.top = top + 'px';
+  }
+}
+
+async function openPreview(title, x, y){
+  previewTarget = title;
+  previewTitle.textContent = title;
+  previewExtract.textContent = 'Loading…';
+  previewThumb.src = '';
+  previewLink.href = `https://en.wikipedia.org/wiki/${encodeURIComponent(title)}`;
+  previewOverlay.classList.remove('hidden');
+  positionPreview(x, y);
+  previewBody.focus();
+  document.addEventListener('keydown', previewKeyHandler);
+  const data = await fetchSummary(title);
+  if (previewTarget !== title) return;
+  previewTitle.textContent = data.title || title;
+  if (data.thumbnail) previewThumb.src = data.thumbnail; else previewThumb.removeAttribute('src');
+  if (data.extract) {
+    const first = data.extract.split('. ').slice(0,2).join('. ');
+    previewExtract.textContent = first;
+  } else {
+    previewExtract.textContent = '';
+  }
+  positionPreview(x, y);
+}
+
+function closePreview(){
+  previewOverlay.classList.add('hidden');
+  previewTarget = null;
+  document.removeEventListener('keydown', previewKeyHandler);
+}
+
+function confirmPreview(){
+  if (!previewTarget) return;
+  const target = previewTarget;
+  closePreview();
+  travelToNeighbor(target);
+}
+
+function previewKeyHandler(e){
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    closePreview();
+  } else if (e.key === 'Enter') {
+    if (document.activeElement !== previewLink) {
+      e.preventDefault();
+      confirmPreview();
+    }
+  } else if (e.key === 'Tab') {
+    e.preventDefault();
+    const focusables = [previewBody, previewLink];
+    let idx = focusables.indexOf(document.activeElement);
+    idx = (idx + (e.shiftKey ? -1 : 1) + focusables.length) % focusables.length;
+    focusables[idx].focus();
+  }
+}
+
+previewOverlay.addEventListener('click', e=>{ if (e.target === previewOverlay) closePreview(); });
+previewBody.addEventListener('click', confirmPreview);
+previewLink.addEventListener('click', e=> e.stopPropagation());
 
 function updateBreadcrumbs(){
   const nav = document.getElementById('breadcrumbs');
