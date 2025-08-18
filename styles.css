@@ -21,11 +21,15 @@ header h1 { margin:0 12px 0 0; font-size:18px; color:var(--accent); }
 .controls button { padding:8px 12px; border:none; border-radius:8px; background:var(--accent); color:#0b1020; font-weight:600; cursor:pointer; transition:background 0.2s, transform 0.1s; }
 .controls button:hover { background:#96bdfc; }
 .controls button:active { transform:scale(0.97); }
+.toggle { font-size:12px; color:var(--muted); display:flex; align-items:center; gap:4px; }
+.toggle input { accent-color:var(--accent); }
+#resetCam { padding:6px 8px; border:none; border-radius:8px; background:var(--panel); color:var(--text); cursor:pointer; }
+#resetCam:hover { background:#23283b; }
 
 #summary { font-size:13px; color:var(--muted); margin-bottom:8px; }
 #summary img { width:100%; max-height:120px; object-fit:cover; border-radius:6px; margin-bottom:6px; }
 
-main { display:grid; grid-template-columns: 1fr 300px; height: calc(100vh - 70px); }
+main { display:grid; grid-template-columns: 1fr 300px; height: calc(100vh - 110px); }
 #canvas { position:relative; background:radial-gradient(circle at center, #0c0e17, #05060b); }
 #info { border-left:1px solid #23283b; padding:12px; background:#0f1220; overflow:auto; box-shadow:-2px 0 4px rgba(0,0,0,0.4); }
 #currentWord { margin:6px 0 8px; font-size:16px; }
@@ -33,8 +37,16 @@ main { display:grid; grid-template-columns: 1fr 300px; height: calc(100vh - 70px
 #neighbors { display:grid; gap:8px; }
 .card { background:var(--panel); border:1px solid #23283b; border-radius:10px; padding:8px; }
 .card h3 { margin:0 0 6px; font-size:13px; color:var(--muted); }
-.item { display:flex; justify-content:space-between; font-size:13px; margin:2px 0; cursor:pointer; }
-.item:hover { opacity:0.9; background:#23283b; border-radius:6px; }
+.neighbor { display:flex; gap:6px; align-items:flex-start; padding:6px; background:var(--panel); border:1px solid #23283b; border-radius:8px; cursor:pointer; }
+.neighbor:focus { outline:2px solid var(--accent); }
+.neighbor.visited { opacity:0.6; }
+.neighbor .thumb { width:40px; height:40px; object-fit:cover; border-radius:4px; background:#23283b; flex-shrink:0; }
+.neighbor .meta { flex:1; overflow:hidden; }
+.neighbor .title { font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.neighbor.visited .title::after { content:'\2713'; margin-left:4px; color:var(--muted); }
+.neighbor .extract { font-size:12px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.neighbor .ext { margin-left:4px; color:var(--muted); text-decoration:none; }
+.neighbor .ext:hover { color:var(--accent); }
 .badge { padding:2px 6px; border-radius:6px; background:#23283b; color:var(--muted); }
 
 .tooltip { position:absolute; pointer-events:none; padding:4px 8px; font-size:12px; background:#11131a; color:var(--text); border:1px solid var(--edge); border-radius:6px; transform: translate(-50%, -140%); white-space:nowrap; opacity:0; transition: opacity 0.12s ease; }
@@ -44,6 +56,11 @@ main { display:grid; grid-template-columns: 1fr 300px; height: calc(100vh - 70px
 .fade.out { opacity: 0; }
 
 footer { padding:6px 12px; border-top:1px solid #23283b; font-size:12px; color:var(--muted); background:#0f1220; }
+
+#breadcrumbs { display:flex; gap:6px; flex-wrap:wrap; padding:6px 16px; background:#0f1220; border-bottom:1px solid #23283b; font-size:12px; }
+#breadcrumbs button { background:none; border:none; color:var(--accent); cursor:pointer; padding:2px 4px; border-radius:4px; max-width:120px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+#breadcrumbs button:hover, #breadcrumbs button:focus { background:#23283b; outline:none; }
+#breadcrumbs span { color:var(--muted); }
 
 .overlay { position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(14,15,19,0.9); display:flex; align-items:center; justify-content:center; z-index:50; font-size:20px; }
 .overlay.hidden { display:none; }
