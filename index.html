@@ -3,36 +3,32 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>WordSpace • Semantic Starfield</title>
+    <title>StarWiki • Wikipedia Rabbit Hole Explorer</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <div id="loading" class="overlay"><span id="loadingText">Loading dataset…</span></div>
+    <div id="loading" class="overlay"><span id="loadingText">Loading…</span></div>
     <header>
-      <h1>WordSpace • Semantic Starfield</h1>
+      <h1>StarWiki • Wikipedia Rabbit Hole Explorer</h1>
       <div class="controls">
-        <input id="search" type="text" placeholder="Type a word to center (e.g., apple)" list="wordlist" />
+        <input id="search" type="text" placeholder="Type a page title (e.g., Earth)" list="wordlist" />
         <datalist id="wordlist"></datalist>
         <button id="goBtn">Re-center</button>
-        <label class="toggle"><input id="showFar" type="checkbox" checked /> Contrast rays</label>
-      </div>
-      <div class="legend">
-        <span class="dot similar"></span> Blue rays = related words
-        <span class="dot contrast"></span> Red dashed rays = distant contrasts
       </div>
     </header>
 
     <main>
       <div id="canvas"></div>
       <aside id="info">
-        <h2 id="currentWord">Select a word</h2>
-        <div class="hint">Hover a ray to see its word; click to travel. Scroll to zoom. Drag to orbit.</div>
+        <h2 id="currentWord">Select a page</h2>
+        <div id="summary"></div>
+        <div class="hint">Hover a ray to see its title; click to travel. Scroll to zoom. Drag to orbit.</div>
         <div id="neighbors"></div>
       </aside>
     </main>
 
     <footer>
-      <small id="datasetMeta"></small>
+      <small>Content from <a href="https://wikipedia.org" target="_blank">Wikipedia</a> • CC BY-SA 4.0</small>
     </footer>
 
     <div id="toast" class="toast"></div>
