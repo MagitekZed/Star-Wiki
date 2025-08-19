@@ -431,7 +431,10 @@ function rebuildStar(title, addToHistory=true){
       history[historyIndex] = canonical;
     }
     clusterGroups.forEach(g=>{ scene.remove(g.star); scene.remove(g.edge); });
-    clearGroup(starGroup); clearGroup(edgeGroup); wordToMesh.clear();
+    clearGroup(starGroup); clearGroup(edgeGroup);
+    // Ensure the reusable groups are attached to the scene again
+    scene.add(starGroup); scene.add(edgeGroup);
+    wordToMesh.clear();
     clusterGroups.clear(); centerPositions.clear(); ghostQueue.length = 0;
     trailGeometry.setFromPoints([]);
     buildStarInto(canonical, star, starGroup, edgeGroup, wordToMesh);
