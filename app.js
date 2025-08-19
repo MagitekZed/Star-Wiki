@@ -109,6 +109,18 @@ const materialReturnNeighborHover = new THREE.SpriteMaterial({
 });
 const materialRayHover = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 1, linewidth: 2 });
 
+// ====== Trail Mode state ======
+const clusterGroups = new Map(); // title -> {star, edge}
+const centerPositions = new Map(); // title -> THREE.Vector3
+const ghostQueue = []; // order of ghost titles
+const MAX_GHOSTS = 5;
+const SEGMENT_DIST = 40; // fixed spacing between centers
+
+const trailMaterial = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.35 });
+const trailGeometry = new THREE.BufferGeometry();
+const trailLine = new THREE.Line(trailGeometry, trailMaterial);
+scene.add(trailLine);
+
 // ====== Interaction ======
 const raycaster = new THREE.Raycaster();
 raycaster.params.Line.threshold = 0.1;
@@ -150,6 +162,34 @@ function directionFromTitle(title){
 
 function clearGroup(g){
   while (g.children.length) g.remove(g.children.pop());
+}
+
+function ghostify(title){
+  const grp = clusterGroups.get(title);
+  if (!grp) return;
+  const fadeStar = 0.25;
+  const fadeEdge = 0.15;
+  grp.star.traverse(obj=>{
+    if(obj.material && 'opacity' in obj.material){
+      obj.material.opacity = fadeStar;
+      obj.material.transparent = true;
+    }
+  });
+  grp.edge.traverse(obj=>{
+    if(obj.material && 'opacity' in obj.material){
+      obj.material.opacity = fadeEdge;
+      obj.material.transparent = true;
+    }
+  });
+}
+
+function updateTrail(){
+  const pts = history.map(t => centerPositions.get(t)).filter(Boolean);
+  if (pts.length < 2) {
+    trailGeometry.setFromPoints([]);
+  } else {
+    trailGeometry.setFromPoints(pts);
+  }
 }
 
 // ====== Wikipedia adapter ======
@@ -315,6 +355,7 @@ let historyIndex = -1;
 const visited = new Set();
 let wordToMesh = new Map();
 let showBacklinks = false;
+let trailMode = true;
 
 const R_MIN = 8;
 const R_MAX = 40;
@@ -421,13 +462,19 @@ function rebuildStar(title, addToHistory=true){
     } else {
       history[historyIndex] = canonical;
     }
+    clusterGroups.forEach(g=>{ scene.remove(g.star); scene.remove(g.edge); });
     clearGroup(starGroup); clearGroup(edgeGroup); wordToMesh.clear();
+    clusterGroups.clear(); centerPositions.clear(); ghostQueue.length = 0;
+    trailGeometry.setFromPoints([]);
     buildStarInto(canonical, star, starGroup, edgeGroup, wordToMesh);
+    clusterGroups.set(canonical, { star: starGroup, edge: edgeGroup });
+    centerPositions.set(canonical, new THREE.Vector3(0,0,0));
     currentTitle = canonical;
-    controls.target.set(0,0,0);
+    controls.target.copy(new THREE.Vector3(0,0,0));
     fadeInGroups();
     visited.add(canonical);
     updateBreadcrumbs();
+    updateTrail();
     isAnimating = false;
   }).catch(err => {
     console.error(err);
@@ -442,9 +489,6 @@ let isAnimating = false;
 async function travelToNeighbor(targetTitle, addToHistory=true){
   if (isAnimating || !currentTitle || !wordToMesh.has(targetTitle)) return;
   isAnimating = true;
-
-  const from = new THREE.Vector3(0,0,0);
-  const to = wordToMesh.get(targetTitle).position.clone();
 
   const overlay = document.getElementById('loading');
   const text = document.getElementById('loadingText');
@@ -462,6 +506,17 @@ async function travelToNeighbor(targetTitle, addToHistory=true){
   overlay.classList.add('hidden');
 
   const canonical = star.center.title;
+  const from = centerPositions.get(currentTitle) || new THREE.Vector3(0,0,0);
+  let to;
+  if (trailMode && centerPositions.has(canonical)) {
+    to = centerPositions.get(canonical).clone();
+    const old = clusterGroups.get(canonical);
+    if (old) { scene.remove(old.star); scene.remove(old.edge); clusterGroups.delete(canonical); }
+    const idx = ghostQueue.indexOf(canonical); if (idx !== -1) ghostQueue.splice(idx,1);
+  } else {
+    const dirVec = wordToMesh.get(targetTitle).position.clone().normalize();
+    to = from.clone().add(dirVec.multiplyScalar(SEGMENT_DIST));
+  }
   if (addToHistory) {
     if (historyIndex < history.length - 1) history = history.slice(0, historyIndex + 1);
     history.push(canonical);
@@ -487,7 +542,6 @@ async function travelToNeighbor(targetTitle, addToHistory=true){
   const startCam = camera.position.clone();
   const startTarget = controls.target.clone();
   const startOffset = startCam.clone().sub(startTarget);
-  const endOffset = startOffset.clone().setLength(12);
   const duration = 1400;
   const fadeStart = 0.3;
   const t0 = performance.now();
@@ -498,8 +552,7 @@ async function travelToNeighbor(targetTitle, addToHistory=true){
     const curTarget = from.clone().lerp(to, ease);
     controls.target.copy(curTarget);
 
-    const curOffset = startOffset.clone().lerp(endOffset, ease);
-    const curCam = curTarget.clone().add(curOffset);
+    const curCam = curTarget.clone().add(startOffset);
     camera.position.copy(curCam);
 
     const fadeOut = t < fadeStart ? 1 : 1 - (t - fadeStart)/(1 - fadeStart);
@@ -514,14 +567,25 @@ async function travelToNeighbor(targetTitle, addToHistory=true){
 
     if (t < 1) requestAnimationFrame(tick);
     else {
-      scene.remove(starGroup); scene.remove(edgeGroup);
-      newStar.position.sub(to); newEdge.position.sub(to);
+      if (trailMode) {
+        ghostify(currentTitle);
+        ghostQueue.push(currentTitle);
+        if (ghostQueue.length > MAX_GHOSTS) {
+          const old = ghostQueue.shift();
+          const grp = clusterGroups.get(old);
+          if (grp) { scene.remove(grp.star); scene.remove(grp.edge); clusterGroups.delete(old); centerPositions.delete(old); }
+        }
+      } else {
+        const grp = clusterGroups.get(currentTitle);
+        if (grp) { scene.remove(grp.star); scene.remove(grp.edge); clusterGroups.delete(currentTitle); centerPositions.delete(currentTitle); }
+      }
       starGroup = newStar;
       edgeGroup = newEdge;
       wordToMesh = newMap;
       currentTitle = star.center.title;
-      controls.target.set(0,0,0);
-      camera.position.copy(endOffset);
+      clusterGroups.set(currentTitle, { star: starGroup, edge: edgeGroup });
+      centerPositions.set(currentTitle, to.clone());
+      if (trailMode) updateTrail(); else trailGeometry.setFromPoints([]);
       visited.add(currentTitle);
       updateBreadcrumbs();
       hovered = null;
@@ -826,9 +890,20 @@ document.getElementById('backToggle').addEventListener('change', (e)=>{
   showBacklinks = e.target.checked;
   if (currentTitle) rebuildStar(currentTitle, false);
 });
+document.getElementById('trailToggle').addEventListener('change', (e)=>{
+  trailMode = e.target.checked;
+  if (!trailMode) {
+    clusterGroups.forEach((g,t)=>{
+      if (t !== currentTitle) { scene.remove(g.star); scene.remove(g.edge); clusterGroups.delete(t); centerPositions.delete(t); }
+    });
+    ghostQueue.length = 0;
+    updateTrail();
+  }
+});
 document.getElementById('resetCam').addEventListener('click', ()=>{
-  controls.target.set(0,0,0);
-  camera.position.copy(DEFAULT_CAM_POS);
+  const pos = centerPositions.get(currentTitle) || new THREE.Vector3(0,0,0);
+  controls.target.copy(pos);
+  camera.position.copy(pos.clone().add(DEFAULT_CAM_POS.clone()));
   controls.update();
   renderOnce();
 });
@@ -899,6 +974,7 @@ function onGo(){
   controls.update();
   hovered = null;
   tooltip.classList.remove('show');
+  clusterGroups.forEach(g=>{ scene.remove(g.star); scene.remove(g.edge); });
   rebuildStar(val);
 }
 
