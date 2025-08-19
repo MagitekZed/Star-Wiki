@@ -125,7 +125,12 @@ container.addEventListener('mousemove', (e)=>{
 container.addEventListener('click', (e)=>{
   if (hovered && hovered.object && hovered.object.userData && hovered.object.userData.title && hovered.object.userData.kind !== 'center') {
     const toTitle = hovered.object.userData.title;
-    openPreview(toTitle, e.clientX, e.clientY);
+    const prev = getChainPrev();
+    if (prev && toTitle === prev && hovered.object.userData.kind === 'ray') {
+      goBackOne();
+    } else {
+      openPreview(toTitle, e.clientX, e.clientY);
+    }
   } else if (previewTarget) {
     closePreview();
   }
@@ -352,6 +357,26 @@ function getChainPrev(){
   return historyIndex > 0 ? history[historyIndex - 1] : null;
 }
 
+function goBackOne(){
+  const prev = getChainPrev();
+  if (prev && historyIndex > 0 && !isAnimating) {
+    historyIndex--;
+    travelToNeighbor(prev, false);
+    return true;
+  }
+  return false;
+}
+
+function goForwardOne(){
+  if (historyIndex < history.length - 1 && !isAnimating) {
+    const next = history[historyIndex + 1];
+    historyIndex++;
+    travelToNeighbor(next, false);
+    return true;
+  }
+  return false;
+}
+
 function positionForNeighbor(title, index, total){
   const dir = directionFromTitle(title);
   const r = R_MIN + (total <= 1 ? 0 : index/(total-1)) * (R_MAX - R_MIN);
@@ -455,10 +480,63 @@ function rebuildStar(title, addToHistory=true){
   });
 }
 
+async function refreshCurrentNeighbors(){
+  if (!currentTitle) return;
+  const overlay = document.getElementById('loading');
+  const text = document.getElementById('loadingText');
+  text.textContent = `Loading ${currentTitle}…`;
+  overlay.classList.remove('hidden');
+  let star;
+  try {
+    star = await getPageStar(currentTitle, showBacklinks);
+  } catch (e) {
+    overlay.classList.add('hidden');
+    showToast('Failed to load page.');
+    return;
+  }
+  overlay.classList.add('hidden');
+
+  const prevTitle = getChainPrev();
+  const pos = centerPositions.get(currentTitle) || new THREE.Vector3(0,0,0);
+  const prevVec = prevTitle && centerPositions.has(prevTitle)
+    ? centerPositions.get(prevTitle).clone().sub(pos)
+    : null;
+
+  scene.remove(starGroup);
+  scene.remove(edgeGroup);
+  clusterGroups.delete(currentTitle);
+
+  const newStar = new THREE.Group();
+  const newEdge = new THREE.Group();
+  const newMap = new Map();
+  buildStarInto(currentTitle, star, newStar, newEdge, newMap, prevTitle, prevVec);
+  newStar.position.copy(pos);
+  newEdge.position.copy(pos);
+  scene.add(newStar);
+  scene.add(newEdge);
+
+  starGroup = newStar;
+  edgeGroup = newEdge;
+  wordToMesh = newMap;
+  clusterGroups.set(currentTitle, { star: starGroup, edge: edgeGroup });
+  hovered = null;
+  tooltip.classList.remove('show');
+  renderOnce();
+}
+
 // ====== Travel ======
 let isAnimating = false;
 async function travelToNeighbor(targetTitle, addToHistory=true){
-  if (isAnimating || !currentTitle || !wordToMesh.has(targetTitle)) return;
+  if (isAnimating || !currentTitle) return;
+  if (!wordToMesh.has(targetTitle)) {
+    const prev = getChainPrev();
+    if (prev && targetTitle === prev && centerPositions.has(prev) && centerPositions.has(currentTitle)) {
+      const diff = centerPositions.get(prev).clone().sub(centerPositions.get(currentTitle));
+      wordToMesh.set(prev, { position: diff });
+    } else {
+      return;
+    }
+  }
   isAnimating = true;
 
   const overlay = document.getElementById('loading');
@@ -599,8 +677,8 @@ function updateSidebar(center, neighbors, chainPrev){
     backRow.className = 'neighbor return';
     backRow.tabIndex = 0;
     backRow.textContent = `Back to ${chainPrev}`;
-    backRow.addEventListener('click', e=> openPreview(chainPrev, e.clientX, e.clientY));
-    backRow.addEventListener('keydown', e=>{ if(e.key==='Enter') openPreview(chainPrev); });
+    backRow.addEventListener('click', ()=> goBackOne());
+    backRow.addEventListener('keydown', e=>{ if(e.key==='Enter') goBackOne(); });
     container.appendChild(backRow);
   }
   neighbors.forEach(nb => {
@@ -855,7 +933,7 @@ document.getElementById('goBtn').addEventListener('click', onGo);
 searchInput.addEventListener('keydown', (e)=>{ if (e.key === 'Enter') onGo(); });
 document.getElementById('backToggle').addEventListener('change', (e)=>{
   showBacklinks = e.target.checked;
-  if (currentTitle) rebuildStar(currentTitle, false);
+  if (currentTitle) refreshCurrentNeighbors();
 });
 document.getElementById('trailToggle').addEventListener('change', (e)=>{
   trailMode = e.target.checked;
@@ -896,31 +974,9 @@ document.addEventListener('keydown', e => {
   if (!previewOverlay.classList.contains('hidden')) closePreview();
   if (helpModal && !helpModal.classList.contains('hidden')) helpModal.classList.add('hidden');
   if (e.key === 'ArrowLeft') {
-    if (historyIndex > 0 && !isAnimating) {
-      const newIndex = historyIndex - 1;
-      const target = history[newIndex];
-      historyIndex = newIndex;
-      if (wordToMesh.has(target)) {
-        travelToNeighbor(target, false);
-      } else {
-        isAnimating = true;
-        rebuildStar(target, false);
-      }
-      e.preventDefault();
-    }
+    if (goBackOne()) e.preventDefault();
   } else if (e.key === 'ArrowRight') {
-    if (historyIndex < history.length - 1 && !isAnimating) {
-      const newIndex = historyIndex + 1;
-      const target = history[newIndex];
-      historyIndex = newIndex;
-      if (wordToMesh.has(target)) {
-        travelToNeighbor(target, false);
-      } else {
-        isAnimating = true;
-        rebuildStar(target, false);
-      }
-      e.preventDefault();
-    }
+    if (goForwardOne()) e.preventDefault();
   }
 });
 function onGo(){
