@@ -31,10 +31,12 @@ header h1 { margin:0 12px 0 0; font-size:18px; color:var(--accent); }
 
 main { display:grid; grid-template-columns: 1fr 330px; height: calc(100vh - 110px); }
 #canvas { position:relative; background:radial-gradient(circle at center, #0c0e17, #05060b); }
-#info { border-left:1px solid #23283b; padding:12px; background:#0f1220; overflow:auto; box-shadow:-2px 0 4px rgba(0,0,0,0.4); }
+#info { border-left:1px solid #23283b; padding:12px; background:#0f1220; overflow-y:auto; overflow-x:hidden; box-shadow:-2px 0 4px rgba(0,0,0,0.4); }
+#info * { max-width:100%; }
+#currentWord, #summary { overflow-wrap:anywhere; }
 #currentWord { margin:6px 0 8px; font-size:16px; }
 .hint { font-size:12px; color:var(--muted); margin-bottom:8px; }
-#neighbors { display:grid; gap:8px; }
+#neighbors { display:grid; gap:8px; grid-template-columns:1fr; }
 .card { background:var(--panel); border:1px solid #23283b; border-radius:10px; padding:8px; }
 .card h3 { margin:0 0 6px; font-size:13px; color:var(--muted); }
 .neighbor { display:flex; gap:6px; align-items:flex-start; padding:6px; background:var(--panel); border:1px solid #23283b; border-radius:8px; cursor:pointer; }
@@ -42,7 +44,7 @@ main { display:grid; grid-template-columns: 1fr 330px; height: calc(100vh - 110p
 .neighbor.visited { opacity:0.6; }
 .neighbor.return { border-color:var(--danger); color:var(--danger); justify-content:center; align-items:center; }
 .neighbor .thumb { width:40px; height:40px; object-fit:cover; border-radius:4px; background:#23283b; flex-shrink:0; }
-.neighbor .meta { flex:1; overflow:hidden; }
+.neighbor .meta { flex:1; overflow:hidden; min-width:0; }
 .neighbor .title { font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .neighbor.visited .title::after { content:'\2713'; margin-left:4px; color:var(--muted); }
 .neighbor .extract {
