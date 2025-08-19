@@ -54,14 +54,8 @@ const previewLink = document.getElementById('previewLink');
 // ====== Star groups ======
 let starGroup = new THREE.Group();
 let edgeGroup = new THREE.Group();
-let ghostClusters = [];
-const GHOST_LIMIT = 5;
-const STEP_DISTANCE = 15;
-let trailMode = true;
-const trailGroup = new THREE.Group();
 scene.add(starGroup);
 scene.add(edgeGroup);
-scene.add(trailGroup);
 
 const starTexture = createStarTexture();
 const materialCenter = new THREE.SpriteMaterial({
@@ -156,38 +150,6 @@ function directionFromTitle(title){
 
 function clearGroup(g){
   while (g.children.length) g.remove(g.children.pop());
-}
-
-function ghostify(star, edge){
-  star.traverse(obj=>{
-    if(obj.material){
-      obj.material = obj.material.clone();
-      obj.material.transparent = true;
-      obj.material.opacity *= (obj.userData && obj.userData.kind === 'center') ? 0.3 : 0.2;
-      if(obj.material.color) obj.material.color.set(0x7aa2f7);
-    }
-    if(obj.userData) obj.userData.ghost = true;
-  });
-  edge.traverse(obj=>{
-    if(obj.material){
-      obj.material = obj.material.clone();
-      obj.material.transparent = true;
-      obj.material.opacity *= 0.1;
-      if(obj.material.color) obj.material.color.set(0x7aa2f7);
-    }
-  });
-}
-
-function rebuildTrail(){
-  clearGroup(trailGroup);
-  const pts = ghostClusters.map(g=>g.starGroup.position.clone());
-  pts.push(new THREE.Vector3(0,0,0));
-  for(let i=1;i<pts.length;i++){
-    const geom = new THREE.BufferGeometry().setFromPoints([pts[i-1], pts[i]]);
-    const opacity = 0.2 + (0.4 * (i-1) / Math.max(1, pts.length-2));
-    const mat = new THREE.LineBasicMaterial({color:0x7aa2f7, transparent:true, opacity});
-    trailGroup.add(new THREE.Line(geom, mat));
-  }
 }
 
 // ====== Wikipedia adapter ======
@@ -444,7 +406,7 @@ function buildStarInto(centerTitle, data, gStar, gEdge, map){
   updateSidebar(data.center, sidebarNeighbors, chainPrev);
 }
 
-function rebuildStar(title, addToHistory=true, keepTrail=false){
+function rebuildStar(title, addToHistory=true){
   const overlay = document.getElementById('loading');
   const text = document.getElementById('loadingText');
   text.textContent = `Loading ${title}…`;
@@ -452,11 +414,6 @@ function rebuildStar(title, addToHistory=true, keepTrail=false){
   return getPageStar(title, showBacklinks).then(star => {
     overlay.classList.add('hidden');
     const canonical = star.center.title;
-    if (!keepTrail) {
-      ghostClusters.forEach(g=>{scene.remove(g.starGroup); scene.remove(g.edgeGroup);});
-      ghostClusters = [];
-      clearGroup(trailGroup);
-    }
     if (addToHistory) {
       if (historyIndex < history.length - 1) history = history.slice(0, historyIndex + 1);
       history.push(canonical);
@@ -487,7 +444,7 @@ async function travelToNeighbor(targetTitle, addToHistory=true){
   isAnimating = true;
 
   const from = new THREE.Vector3(0,0,0);
-  const to = wordToMesh.get(targetTitle).position.clone().normalize().multiplyScalar(STEP_DISTANCE);
+  const to = wordToMesh.get(targetTitle).position.clone();
 
   const overlay = document.getElementById('loading');
   const text = document.getElementById('loadingText');
@@ -557,22 +514,7 @@ async function travelToNeighbor(targetTitle, addToHistory=true){
 
     if (t < 1) requestAnimationFrame(tick);
     else {
-      if (trailMode) {
-        ghostClusters.forEach(g=>{
-          g.starGroup.position.sub(to);
-          g.edgeGroup.position.sub(to);
-        });
-        starGroup.position.sub(to);
-        edgeGroup.position.sub(to);
-        ghostify(starGroup, edgeGroup);
-        ghostClusters.push({starGroup, edgeGroup});
-        if (ghostClusters.length > GHOST_LIMIT) {
-          const old = ghostClusters.shift();
-          scene.remove(old.starGroup); scene.remove(old.edgeGroup);
-        }
-      } else {
-        scene.remove(starGroup); scene.remove(edgeGroup);
-      }
+      scene.remove(starGroup); scene.remove(edgeGroup);
       newStar.position.sub(to); newEdge.position.sub(to);
       starGroup = newStar;
       edgeGroup = newEdge;
@@ -580,7 +522,6 @@ async function travelToNeighbor(targetTitle, addToHistory=true){
       currentTitle = star.center.title;
       controls.target.set(0,0,0);
       camera.position.copy(endOffset);
-      if(trailMode) rebuildTrail();
       visited.add(currentTitle);
       updateBreadcrumbs();
       hovered = null;
@@ -883,15 +824,7 @@ document.getElementById('goBtn').addEventListener('click', onGo);
 searchInput.addEventListener('keydown', (e)=>{ if (e.key === 'Enter') onGo(); });
 document.getElementById('backToggle').addEventListener('change', (e)=>{
   showBacklinks = e.target.checked;
-  if (currentTitle) rebuildStar(currentTitle, false, true);
-});
-document.getElementById('trailToggle').addEventListener('change', (e)=>{
-  trailMode = e.target.checked;
-  if (!trailMode) {
-    ghostClusters.forEach(g=>{scene.remove(g.starGroup); scene.remove(g.edgeGroup);});
-    ghostClusters = [];
-    clearGroup(trailGroup);
-  }
+  if (currentTitle) rebuildStar(currentTitle, false);
 });
 document.getElementById('resetCam').addEventListener('click', ()=>{
   controls.target.set(0,0,0);
@@ -958,9 +891,6 @@ function onGo(){
   summaryCache.clear();
   try { localStorage.clear(); } catch {}
   visited.clear();
-  ghostClusters.forEach(g=>{scene.remove(g.starGroup); scene.remove(g.edgeGroup);});
-  ghostClusters = [];
-  clearGroup(trailGroup);
   history = [];
   historyIndex = -1;
   updateBreadcrumbs();
