@@ -95,18 +95,6 @@ const materialVisited = new THREE.SpriteMaterial({
   transparent: true
 });
 const RETURN_COLOR = 0xf7768e;
-const materialReturnNeighbor = new THREE.SpriteMaterial({
-  map: starTexture,
-  color: RETURN_COLOR,
-  blending: THREE.AdditiveBlending,
-  transparent: true
-});
-const materialReturnNeighborHover = new THREE.SpriteMaterial({
-  map: starTexture,
-  color: 0xffa0b3,
-  blending: THREE.AdditiveBlending,
-  transparent: true
-});
 const materialRayHover = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 1, linewidth: 2 });
 
 // ====== Trail Mode state ======
@@ -388,16 +376,6 @@ function placeNeighbor(title, posArray, group = starGroup, map = wordToMesh){
   return mesh;
 }
 
-function placeReturnNeighbor(title, posArray, group = starGroup, map = wordToMesh){
-  const mesh = new THREE.Sprite(materialReturnNeighbor.clone());
-  mesh.position.set(posArray[0], posArray[1], posArray[2]);
-  mesh.userData = { title, kind: 'neighbor', baseScale: 1.2, isReturn: true };
-  mesh.scale.set(1.2, 1.2, 1);
-  group.add(mesh);
-  map.set(title, mesh);
-  return mesh;
-}
-
 function drawRay(centerTitle, targetTitle, startVec3, endVec3, rank, total, group = edgeGroup, colorOverride=null){
   const geo = new THREE.BufferGeometry().setFromPoints([startVec3, endVec3]);
   const lineOpacity = colorOverride ? 1 : opacityFromRank(rank, total);
@@ -413,7 +391,7 @@ function drawRay(centerTitle, targetTitle, startVec3, endVec3, rank, total, grou
   group.add(line);
 }
 
-function buildStarInto(centerTitle, data, gStar, gEdge, map){
+function buildStarInto(centerTitle, data, gStar, gEdge, map, prevTitle=null, prevVec=null){
   const centerMesh = new THREE.Sprite(materialCenter.clone());
   centerMesh.position.set(0,0,0);
   centerMesh.scale.setScalar(2);
@@ -422,29 +400,19 @@ function buildStarInto(centerTitle, data, gStar, gEdge, map){
   map.set(centerTitle, centerMesh);
 
   const neighbors = data.neighbors.slice(0,20);
-  const chainPrev = getChainPrev();
+  const filtered = prevTitle ? neighbors.filter(nb => nb !== prevTitle) : neighbors;
 
-  neighbors.forEach((nb, i) => {
-    const pos = positionForNeighbor(nb, i, neighbors.length);
-    if (chainPrev && nb === chainPrev) {
-      placeReturnNeighbor(nb, pos, gStar, map);
-      drawRay(centerTitle, nb, new THREE.Vector3(0,0,0), new THREE.Vector3(pos[0], pos[1], pos[2]), i, neighbors.length, gEdge, RETURN_COLOR);
-    } else {
-      placeNeighbor(nb, pos, gStar, map);
-      drawRay(centerTitle, nb, new THREE.Vector3(0,0,0), new THREE.Vector3(pos[0], pos[1], pos[2]), i, neighbors.length, gEdge);
-    }
+  filtered.forEach((nb, i) => {
+    const pos = positionForNeighbor(nb, i, filtered.length);
+    placeNeighbor(nb, pos, gStar, map);
+    drawRay(centerTitle, nb, new THREE.Vector3(0,0,0), new THREE.Vector3(pos[0], pos[1], pos[2]), i, filtered.length, gEdge);
   });
 
-  if (chainPrev && !neighbors.includes(chainPrev)) {
-    const idx = neighbors.length;
-    const total = neighbors.length + 1;
-    const pos = positionForNeighbor(chainPrev, idx, total);
-    placeReturnNeighbor(chainPrev, pos, gStar, map);
-    drawRay(centerTitle, chainPrev, new THREE.Vector3(0,0,0), new THREE.Vector3(pos[0], pos[1], pos[2]), idx, total, gEdge, RETURN_COLOR);
+  if (prevTitle && prevVec) {
+    drawRay(centerTitle, prevTitle, new THREE.Vector3(0,0,0), prevVec, 0, 1, gEdge, RETURN_COLOR);
   }
 
-  const sidebarNeighbors = neighbors.filter(nb => nb !== chainPrev);
-  updateSidebar(data.center, sidebarNeighbors, chainPrev);
+  updateSidebar(data.center, filtered, prevTitle);
 }
 
 function rebuildStar(title, addToHistory=true){
@@ -528,7 +496,7 @@ async function travelToNeighbor(targetTitle, addToHistory=true){
   const newStar = new THREE.Group();
   const newEdge = new THREE.Group();
   const newMap = new Map();
-  buildStarInto(canonical, star, newStar, newEdge, newMap);
+  buildStarInto(canonical, star, newStar, newEdge, newMap, currentTitle, from.clone().sub(to));
   newStar.position.copy(to);
   newEdge.position.copy(to);
   scene.add(newStar);
@@ -804,14 +772,10 @@ function resetHovered(){
   if (!hovered) return;
   const obj = hovered.object;
   if (obj.userData.kind === 'neighbor') {
-    if (obj.userData.isReturn) {
-      obj.material = materialReturnNeighbor.clone();
-    } else {
-      const baseMat = visited.has(obj.userData.title)
-        ? materialVisited
-        : (showBacklinks ? materialBackNeighbor : materialNeighbor);
-      obj.material = baseMat.clone();
-    }
+    const baseMat = visited.has(obj.userData.title)
+      ? materialVisited
+      : (showBacklinks ? materialBackNeighbor : materialNeighbor);
+    obj.material = baseMat.clone();
     if(obj.userData.baseScale) obj.scale.set(obj.userData.baseScale, obj.userData.baseScale, 1);
   } else if (obj.userData.normalMat) {
     obj.material = obj.userData.normalMat;
@@ -830,11 +794,7 @@ function updateHover(){
     const obj = first.object;
     tooltip.classList.add('show');
     if (obj.userData.kind === 'neighbor') {
-      if (obj.userData.isReturn) {
-        obj.material = materialReturnNeighborHover.clone();
-      } else {
-        obj.material = (showBacklinks ? materialBackNeighborHover : materialNeighborHover).clone();
-      }
+      obj.material = (showBacklinks ? materialBackNeighborHover : materialNeighborHover).clone();
       if(obj.userData.baseScale) obj.scale.set(obj.userData.baseScale * 1.25, obj.userData.baseScale * 1.25, 1);
       const v = obj.position.clone().project(camera);
       const x = (v.x * 0.5 + 0.5) * renderer.domElement.clientWidth;
