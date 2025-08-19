@@ -104,7 +104,7 @@ const ghostQueue = []; // order of ghost titles
 const MAX_GHOSTS = 5;
 const SEGMENT_DIST = 40; // fixed spacing between centers
 
-const trailMaterial = new THREE.LineBasicMaterial({ vertexColors: true, transparent: true });
+const trailMaterial = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.35 });
 const trailGeometry = new THREE.BufferGeometry();
 const trailLine = new THREE.Line(trailGeometry, trailMaterial);
 scene.add(trailLine);
@@ -123,10 +123,14 @@ container.addEventListener('mousemove', (e)=>{
 });
 
 container.addEventListener('click', (e)=>{
-  if (isAnimating) return;
   if (hovered && hovered.object && hovered.object.userData && hovered.object.userData.title && hovered.object.userData.kind !== 'center') {
     const toTitle = hovered.object.userData.title;
-    openPreview(toTitle, e.clientX, e.clientY);
+    const prev = getChainPrev();
+    if (prev && toTitle === prev && hovered.object.userData.kind === 'ray') {
+      goBackOne();
+    } else {
+      openPreview(toTitle, e.clientX, e.clientY);
+    }
   } else if (previewTarget) {
     closePreview();
   }
@@ -176,23 +180,8 @@ function updateTrail(){
   const pts = history.map(t => centerPositions.get(t)).filter(Boolean);
   if (pts.length < 2) {
     trailGeometry.setFromPoints([]);
-    trailGeometry.setAttribute('color', new THREE.Float32BufferAttribute([], 3));
   } else {
-    const positions = new Float32Array(pts.length * 3);
-    const colors = new Float32Array(pts.length * 3);
-    pts.forEach((p, i) => {
-      positions[i*3] = p.x;
-      positions[i*3+1] = p.y;
-      positions[i*3+2] = p.z;
-      const t = i / (pts.length - 1);
-      const c = new THREE.Color().setScalar(0.25 + 0.75 * t);
-      colors[i*3] = c.r;
-      colors[i*3+1] = c.g;
-      colors[i*3+2] = c.b;
-    });
-    trailGeometry.setAttribute('position', new THREE.Float32BufferAttribute(positions,3));
-    trailGeometry.setAttribute('color', new THREE.Float32BufferAttribute(colors,3));
-    trailGeometry.computeBoundingSphere();
+    trailGeometry.setFromPoints(pts);
   }
 }
 
@@ -436,21 +425,19 @@ function buildStarInto(centerTitle, data, gStar, gEdge, map, prevTitle=null, pre
   map.set(centerTitle, centerMesh);
 
   const neighbors = data.neighbors.slice(0,20);
-  let prevInNeighbors = false;
-  neighbors.forEach((nb, i) => {
-    const pos = positionForNeighbor(nb, i, neighbors.length);
+  const filtered = prevTitle ? neighbors.filter(nb => nb !== prevTitle) : neighbors;
+
+  filtered.forEach((nb, i) => {
+    const pos = positionForNeighbor(nb, i, filtered.length);
     placeNeighbor(nb, pos, gStar, map);
-    const color = (prevTitle && nb === prevTitle) ? RETURN_COLOR : null;
-    drawRay(centerTitle, nb, new THREE.Vector3(0,0,0), new THREE.Vector3(pos[0], pos[1], pos[2]), i, neighbors.length, gEdge, color);
-    if (prevTitle && nb === prevTitle) prevInNeighbors = true;
+    drawRay(centerTitle, nb, new THREE.Vector3(0,0,0), new THREE.Vector3(pos[0], pos[1], pos[2]), i, filtered.length, gEdge);
   });
 
-  if (prevTitle && prevVec && !prevInNeighbors) {
+  if (prevTitle && prevVec) {
     drawRay(centerTitle, prevTitle, new THREE.Vector3(0,0,0), prevVec, 0, 1, gEdge, RETURN_COLOR);
   }
 
-  const sidebarNeighbors = prevTitle ? neighbors.filter(nb => nb !== prevTitle) : neighbors;
-  updateSidebar(data.center, sidebarNeighbors, prevTitle);
+  updateSidebar(data.center, filtered, prevTitle);
 }
 
 function rebuildStar(title, addToHistory=true){
@@ -770,7 +757,6 @@ function positionPreview(x, y){
 }
 
 async function openPreview(title, x, y){
-  if (isAnimating) return;
   previewTarget = title;
   previewTitle.textContent = title;
   previewExtract.textContent = 'Loading…';
