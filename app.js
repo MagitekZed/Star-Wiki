@@ -799,17 +799,21 @@ function updateHover(){
     if (obj.userData.kind === 'neighbor') {
       obj.material = (showBacklinks ? materialBackNeighborHover : materialNeighborHover).clone();
       if(obj.userData.baseScale) obj.scale.set(obj.userData.baseScale * 1.25, obj.userData.baseScale * 1.25, 1);
-      const v = obj.position.clone().project(camera);
-      const x = (v.x * 0.5 + 0.5) * renderer.domElement.clientWidth;
-      const y = (-v.y * 0.5 + 0.5) * renderer.domElement.clientHeight;
+      const worldPos = obj.getWorldPosition(new THREE.Vector3());
+      const rect = renderer.domElement.getBoundingClientRect();
+      const v = worldPos.project(camera);
+      const x = (v.x * 0.5 + 0.5) * rect.width;
+      const y = (-v.y * 0.5 + 0.5) * rect.height;
       tooltip.style.left = x + 'px';
       tooltip.style.top = y + 'px';
       tooltip.textContent = obj.userData.title;
     } else if (obj.userData.title && obj.userData.kind !== 'center') {
       obj.material = materialRayHover;
-      const v = obj.userData.mid.clone().project(camera);
-      const x = (v.x * 0.5 + 0.5) * renderer.domElement.clientWidth;
-      const y = (-v.y * 0.5 + 0.5) * renderer.domElement.clientHeight;
+      const worldMid = obj.parent.localToWorld(obj.userData.mid.clone());
+      const rect = renderer.domElement.getBoundingClientRect();
+      const v = worldMid.project(camera);
+      const x = (v.x * 0.5 + 0.5) * rect.width;
+      const y = (-v.y * 0.5 + 0.5) * rect.height;
       tooltip.style.left = x + 'px';
       tooltip.style.top = y + 'px';
       tooltip.textContent = obj.userData.title;
@@ -863,13 +867,15 @@ document.getElementById('trailToggle').addEventListener('change', (e)=>{
     updateTrail();
   }
 });
-document.getElementById('resetCam').addEventListener('click', ()=>{
-  const pos = centerPositions.get(currentTitle) || new THREE.Vector3(0,0,0);
+
+function centerCameraOnCurrent(){
+  const pos = (centerPositions.get(currentTitle) || starGroup.position || new THREE.Vector3()).clone();
   controls.target.copy(pos);
   camera.position.copy(pos.clone().add(DEFAULT_CAM_POS.clone()));
   controls.update();
   renderOnce();
-});
+}
+document.getElementById('resetCam').addEventListener('click', centerCameraOnCurrent);
 
 const helpModal = document.getElementById('helpModal');
 document.getElementById('helpBtn').addEventListener('click', ()=>{
