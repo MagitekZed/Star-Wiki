@@ -256,6 +256,9 @@ function opacityFromRank(rank, total){
   return 0.25 + (1 - t) * 0.75;
 }
 
+// ---- Bloom tween store for cluster expansion
+const _blooms = []; // { mesh, start, delayMs, target }
+
 function placeNeighbor(title, posArray, group = starGroup, map = wordToMesh){
   const baseMat = visited.has(title)
     ? materialVisited
@@ -263,7 +266,14 @@ function placeNeighbor(title, posArray, group = starGroup, map = wordToMesh){
   const mesh = new THREE.Sprite(baseMat.clone());
   mesh.position.set(posArray[0], posArray[1], posArray[2]);
   mesh.userData = { title, kind: 'neighbor', baseScale: 1.2 };
-  mesh.scale.set(1.2, 1.2, 1);
+  // start tiny; animate to base scale
+  mesh.scale.set(0.001, 0.001, 1);
+  _blooms.push({
+    mesh,
+    start: performance.now(),
+    delayMs: 60 + (seededHash(title) % 180),
+    target: 1.2
+  });
   group.add(mesh);
   map.set(title, mesh);
   return mesh;
@@ -272,16 +282,36 @@ function placeNeighbor(title, posArray, group = starGroup, map = wordToMesh){
 function drawRay(centerTitle, targetTitle, startVec3, endVec3, rank, total, group = edgeGroup, colorOverride=null){
   const geo = new THREE.BufferGeometry().setFromPoints([startVec3, endVec3]);
   const lineOpacity = colorOverride ? 1 : opacityFromRank(rank, total);
+  const baseColor = colorOverride || (showBacklinks ? 0xffd700 : 0x7aa2f7);
   const mat = new THREE.LineBasicMaterial({
-    color: colorOverride || (showBacklinks ? 0xffd700 : 0x7aa2f7),
+    color: baseColor,
     transparent: true,
-    opacity: lineOpacity,
-    linewidth: 2
+    opacity: Math.min(1, lineOpacity + 0.15),
+    blending: THREE.AdditiveBlending
   });
   const line = new THREE.Line(geo, mat);
   const mid = startVec3.clone().add(endVec3).multiplyScalar(0.5);
   line.userData = { center: centerTitle, title: targetTitle, kind: 'ray', normalMat: mat, mid };
   group.add(line);
+
+  // Flow "comet" dot along the ray
+  const dotMat = new THREE.SpriteMaterial({
+    map: starTexture,
+    color: baseColor,
+    transparent: true,
+    blending: THREE.AdditiveBlending,
+    opacity: 0.95
+  });
+  const dot = new THREE.Sprite(dotMat);
+  dot.scale.set(0.7, 0.7, 1);
+  dot.userData = {
+    kind: 'rayDot',
+    start: startVec3.clone(),
+    end: endVec3.clone(),
+    speed: 0.22 + (seededHash(centerTitle + '→' + targetTitle) % 120) / 500,
+    phase: (seededHash(targetTitle) % 1000) / 1000
+  };
+  group.add(dot);
 }
 
 function buildStarInto(centerTitle, data, gStar, gEdge, map, prevTitle=null, prevVec=null){
@@ -553,28 +583,6 @@ function updateSidebar(center, neighbors, chainPrev){
   link.target = '_blank';
   link.textContent = 'View on Wikipedia';
   summaryDiv.appendChild(link);
-
-  // Optional meta badges (length + top categories) — non-blocking, only if present
-  const metaRow = document.createElement('div');
-  metaRow.style.marginTop = '6px';
-  const pieces = [];
-  if (typeof center.length === 'number') {
-    const lenStr = formatBytes(center.length);
-    if (lenStr) {
-      const b = document.createElement('span');
-      b.className = 'badge';
-      b.textContent = `Length: ${lenStr}`;
-      pieces.push(b);
-    }
-  }
-  if (Array.isArray(center.categories) && center.categories.length) {
-    const cats = center.categories.slice(0, 3);
-    cats.forEach(c => {
-      const b = document.createElement('span'); b.className = 'badge'; b.textContent = c; pieces.push(b);
-    });
-  }
-  if (pieces.length) { pieces.forEach(p => { p.style.marginRight = '6px'; metaRow.appendChild(p); }); summaryDiv.appendChild(metaRow); }
-
   summaryCache.set(center.title, { title: center.title, extract: center.summary || '', thumbnail: center.thumbnailUrl || null });
 
   const container = document.getElementById('neighbors');
@@ -904,6 +912,41 @@ function animate(){
   requestAnimationFrame(animate);
   controls.update();
   updateHover();
+
+  // scale-in blooms
+  for (let i = _blooms.length - 1; i >= 0; i--) {
+    const b = _blooms[i];
+    const dt = performance.now() - b.start;
+    if (dt < b.delayMs) continue;
+    const p = Math.min(1, (dt - b.delayMs) / 300);
+    // simple ease-out
+    const eased = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
+    const s = 0.001 + (b.target - 0.001) * eased;
+    b.mesh.scale.set(s, s, 1);
+    if (p >= 1) _blooms.splice(i, 1);
+  }
+
+  // move “comet” dots along rays, pulse return edges
+  const now = performance.now() / 1000;
+  edgeGroup.children.forEach(obj => {
+    if (obj.userData && obj.userData.kind === 'rayDot') {
+      const d = obj.userData;
+      const total = d.end.clone().sub(d.start);
+      const len = total.length();
+      if (len < 0.0001) return;
+      const dir = total.clone().normalize();
+      const t = (d.phase + now * d.speed) % 1;
+      const pos = d.start.clone().add(dir.multiplyScalar(len * t));
+      obj.position.copy(pos);
+      const s = 0.6 + 0.25 * Math.sin((now + d.phase) * 6.0);
+      obj.scale.set(s, s, 1);
+    } else if (obj.isLine && obj.userData && obj.userData.normalMat) {
+      if (obj.userData.normalMat.color?.getHex() === RETURN_COLOR) {
+        obj.userData.normalMat.opacity = 0.65 + 0.35 * Math.sin(now * 2.5);
+      }
+    }
+  });
+
   const t = performance.now() * 0.003;
   starGroup.children.forEach((obj, i) => {
     if (obj.userData && obj.userData.kind === 'neighbor' && (!hovered || hovered.object !== obj)) {
@@ -934,15 +977,6 @@ function init(){
 init();
 
 // ====== Helpers ======
-function formatBytes(bytes){
-  if (typeof bytes !== 'number') return null;
-  const units = ['B','KB','MB','GB'];
-  let v = bytes;
-  let i = 0;
-  while (v >= 1024 && i < units.length-1) { v /= 1024; i++; }
-  return v.toFixed(v < 10 && i > 0 ? 1 : 0) + ' ' + units[i];
-}
-
 function createBackgroundStars(){
   const count = 1000;
   const positions = new Float32Array(count * 3);
