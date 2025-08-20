@@ -553,6 +553,28 @@ function updateSidebar(center, neighbors, chainPrev){
   link.target = '_blank';
   link.textContent = 'View on Wikipedia';
   summaryDiv.appendChild(link);
+
+  // Optional meta badges (length + top categories) — non-blocking, only if present
+  const metaRow = document.createElement('div');
+  metaRow.style.marginTop = '6px';
+  const pieces = [];
+  if (typeof center.length === 'number') {
+    const lenStr = formatBytes(center.length);
+    if (lenStr) {
+      const b = document.createElement('span');
+      b.className = 'badge';
+      b.textContent = `Length: ${lenStr}`;
+      pieces.push(b);
+    }
+  }
+  if (Array.isArray(center.categories) && center.categories.length) {
+    const cats = center.categories.slice(0, 3);
+    cats.forEach(c => {
+      const b = document.createElement('span'); b.className = 'badge'; b.textContent = c; pieces.push(b);
+    });
+  }
+  if (pieces.length) { pieces.forEach(p => { p.style.marginRight = '6px'; metaRow.appendChild(p); }); summaryDiv.appendChild(metaRow); }
+
   summaryCache.set(center.title, { title: center.title, extract: center.summary || '', thumbnail: center.thumbnailUrl || null });
 
   const container = document.getElementById('neighbors');
@@ -912,6 +934,15 @@ function init(){
 init();
 
 // ====== Helpers ======
+function formatBytes(bytes){
+  if (typeof bytes !== 'number') return null;
+  const units = ['B','KB','MB','GB'];
+  let v = bytes;
+  let i = 0;
+  while (v >= 1024 && i < units.length-1) { v /= 1024; i++; }
+  return v.toFixed(v < 10 && i > 0 ? 1 : 0) + ' ' + units[i];
+}
+
 function createBackgroundStars(){
   const count = 1000;
   const positions = new Float32Array(count * 3);
