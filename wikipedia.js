@@ -4,6 +4,56 @@ let lastFetch = 0;
 const FETCH_DELAY = 250;
 const summaryCache = new Map();
 
+// ===== Optional page metadata cache & helpers (categories, wikidata id, length) =====
+const metaCache = new Map();
+
+function chunkArray(arr, size) {
+  const out = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+
+/**
+ * Fetch categories, Wikidata id, and (if available) length for a batch of titles.
+ * Returns a mapping: title -> { categories?: string[], wikidataId?: string|null, length?: number|null }
+ * All fields are optional; callers must treat them as hints.
+ */
+async function fetchPageMetaBatch(titles){
+  const result = {};
+  const missing = [];
+  for (const t of titles) {
+    if (metaCache.has(t)) {
+      result[t] = metaCache.get(t);
+    } else {
+      missing.push(t);
+    }
+  }
+  if (missing.length === 0) return result;
+
+  // MediaWiki API supports up to ~50 titles per request.
+  const chunks = chunkArray(missing, 50);
+  for (const ch of chunks) {
+    try {
+      const url = `https://en.wikipedia.org/w/api.php?action=query&format=json&origin=*&prop=categories|pageprops|info&clshow=!hidden&cllimit=max&titles=${encodeURIComponent(ch.join('|'))}`;
+      const res = await wikiFetch(url);
+      const data = await res.json();
+      const pages = data.query?.pages ? Object.values(data.query.pages) : [];
+      for (const p of pages) {
+        if (!p || p.missing === '' || p.invalid === '') continue;
+        const title = p.title;
+        const meta = {
+          categories: Array.isArray(p.categories) ? p.categories.map(c => c.title.replace(/^Category:/, '')) : undefined,
+          wikidataId: p.pageprops?.wikibase_item || null,
+          length: (typeof p.length === 'number' ? p.length : undefined)
+        };
+        result[title] = meta;
+        metaCache.set(title, meta);
+      }
+    } catch {}
+  }
+  return result;
+}
+
 async function wikiFetch(url){
   const now = Date.now();
   const wait = Math.max(0, lastFetch + FETCH_DELAY - now);
@@ -136,13 +186,25 @@ async function getPageStar(title, backlinks=false){
   });
   const neighbors = scored.slice(0,20).map(s=>s.title);
 
+  // Optional metadata for center + neighbors (best-effort; non-blocking)
+  let metaByTitle = {};
+  try {
+    const meta = await fetchPageMetaBatch([canonical, ...neighbors]);
+    metaByTitle = meta || {};
+  } catch {}
+
   const star = {
     center: {
       title: canonical,
       summary: summaryData.extract,
-      thumbnailUrl: summaryData.thumbnail?.source
+      thumbnailUrl: summaryData.thumbnail?.source,
+      // Optional fields (may be undefined):
+      length: (metaByTitle[canonical]||{}).length,
+      categories: (metaByTitle[canonical]||{}).categories,
+      wikidataId: (metaByTitle[canonical]||{}).wikidataId
     },
     neighbors,
+    metaByTitle,
     fetchedAt: Date.now()
   };
   starCache.set(key, star);
@@ -153,4 +215,4 @@ async function getPageStar(title, backlinks=false){
   return star;
 }
 
-export { wikiFetch, fetchSummary, getPageStar, summaryCache, starCache };
+export { wikiFetch, fetchSummary, getPageStar, summaryCache, starCache, fetchPageMetaBatch };
