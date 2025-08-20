@@ -1,5 +1,6 @@
 import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
 import { OrbitControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/controls/OrbitControls.js?module';
+import { getPageStar, fetchSummary, summaryCache, starCache } from "./wikipedia.js";
 
 // ====== Scene setup ======
 const container = document.getElementById('canvas');
@@ -184,162 +185,6 @@ function updateTrail(){
   } else {
     trailGeometry.setFromPoints(pts);
   }
-}
-
-// ====== Wikipedia adapter ======
-const starCache = new Map();
-const MAX_CACHE = 64;
-let lastFetch = 0;
-const FETCH_DELAY = 250;
-const summaryCache = new Map();
-
-async function wikiFetch(url){
-  const now = Date.now();
-  const wait = Math.max(0, lastFetch + FETCH_DELAY - now);
-  if (wait) await new Promise(r=>setTimeout(r, wait));
-  lastFetch = Date.now();
-  return fetch(url, { headers: { 'Api-User-Agent': 'StarWiki/1.0 (https://example.com)' } });
-}
-
-async function fetchSummary(title){
-  if (summaryCache.has(title)) return summaryCache.get(title);
-  const info = { title, extract: '', thumbnail: null };
-  summaryCache.set(title, info);
-  try {
-    const res = await wikiFetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`);
-    if (res.ok) {
-      const data = await res.json();
-      if (data.title) info.title = data.title;
-      if (data.extract) info.extract = data.extract;
-      if (data.thumbnail?.source) info.thumbnail = data.thumbnail.source;
-    }
-  } catch {}
-  return info;
-}
-
-async function normalizeTitle(title){
-  let canonical = title;
-  try {
-    const url = `https://en.wikipedia.org/w/api.php?action=query&redirects=1&titles=${encodeURIComponent(title)}&format=json&origin=*`;
-    const res = await wikiFetch(url);
-    const data = await res.json();
-    const page = data.query?.pages ? Object.values(data.query.pages)[0] : null;
-    if (page?.title) canonical = page.title;
-  } catch {}
-  return canonical;
-}
-
-async function fetchRelevance(title){
-  const relevance = new Map();
-  try {
-    const url = `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(`morelike:${title}`)}&srlimit=500&srprop=score&format=json&origin=*`;
-    const res = await wikiFetch(url);
-    const data = await res.json();
-    if (data.query?.search) {
-      data.query.search.forEach((it, idx) => {
-        relevance.set(it.title, { rank: idx, score: it.score });
-      });
-    }
-  } catch {}
-  return relevance;
-}
-
-async function getPageStar(title, backlinks=false){
-  title = title.trim();
-  const preKey = `${backlinks ? 'back' : 'out'}|${title}`;
-  if (starCache.has(preKey)) {
-    const v = starCache.get(preKey);
-    starCache.delete(preKey); starCache.set(preKey, v);
-    return v;
-  }
-
-  const canonical = await normalizeTitle(title);
-  const key = `${backlinks ? 'back' : 'out'}|${canonical}`;
-  if (starCache.has(key)) {
-    const v = starCache.get(key);
-    starCache.delete(key); starCache.set(key, v);
-    return v;
-  }
-
-  let summaryData = null;
-  try {
-    const res = await wikiFetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(canonical)}`);
-    if (res.ok) summaryData = await res.json();
-  } catch {}
-  if (!summaryData) throw new Error('summary fetch failed');
-
-  const candidates = [];
-  const seen = new Set();
-  try {
-    if (backlinks) {
-      let cont = null;
-      do {
-        let url = `https://en.wikipedia.org/w/api.php?action=query&list=backlinks&bltitle=${encodeURIComponent(canonical)}&blnamespace=0&bllimit=max&format=json&origin=*`;
-        if (cont) url += `&blcontinue=${encodeURIComponent(cont)}`;
-        const res = await wikiFetch(url);
-        const data = await res.json();
-        if (data.query?.backlinks) {
-          for (const l of data.query.backlinks) {
-            const t = l.title;
-            if (t === canonical || seen.has(t)) continue;
-            seen.add(t); candidates.push({ title: t, index: candidates.length });
-          }
-        }
-        cont = data.continue?.blcontinue;
-      } while (cont);
-    } else {
-      let cont = null;
-      do {
-        let url = `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(canonical)}&prop=links&plnamespace=0&pllimit=max&format=json&origin=*`;
-        if (cont) url += `&plcontinue=${encodeURIComponent(cont)}`;
-        const res = await wikiFetch(url);
-        const data = await res.json();
-        const page = data.query?.pages ? Object.values(data.query.pages)[0] : null;
-        if (page?.links) {
-          for (const l of page.links) {
-            const t = l.title;
-            if (t === canonical || seen.has(t)) continue;
-            seen.add(t); candidates.push({ title: t, index: candidates.length });
-          }
-        }
-        cont = data.continue?.plcontinue;
-      } while (cont);
-    }
-  } catch {}
-
-  const relevance = await fetchRelevance(canonical);
-  const scored = candidates.map(c => {
-    const r = relevance.get(c.title);
-    return {
-      title: c.title,
-      index: c.index,
-      rank: r ? r.rank : Infinity,
-      score: r ? r.score : 0
-    };
-  });
-  scored.sort((a,b)=> {
-    if (a.rank !== b.rank) return a.rank - b.rank;
-    if (a.score !== b.score) return b.score - a.score;
-    if (a.index !== b.index) return a.index - b.index;
-    return a.title.localeCompare(b.title);
-  });
-  const neighbors = scored.slice(0,20).map(s=>s.title);
-
-  const star = {
-    center: {
-      title: canonical,
-      summary: summaryData.extract,
-      thumbnailUrl: summaryData.thumbnail?.source
-    },
-    neighbors,
-    fetchedAt: Date.now()
-  };
-  starCache.set(key, star);
-  if (starCache.size > MAX_CACHE) {
-    const first = starCache.keys().next().value;
-    starCache.delete(first);
-  }
-  return star;
 }
 
 // ====== Star building ======
@@ -946,49 +791,6 @@ function updateHover(){
   }
 }
 
-// ====== Search ======
-const searchInput = document.getElementById('search');
-let suggestTimer = null;
-searchInput.addEventListener('input', (e)=>{
-  clearTimeout(suggestTimer);
-  const q = e.target.value.trim();
-  if (!q) { populateDatalist([]); return; }
-  suggestTimer = setTimeout(async ()=>{
-    try {
-      const res = await wikiFetch(`https://en.wikipedia.org/w/api.php?action=opensearch&origin=*&limit=10&namespace=0&format=json&search=${encodeURIComponent(q)}`);
-      const data = await res.json();
-      populateDatalist(data[1] || []);
-    } catch{}
-  }, 300);
-});
-
-function populateDatalist(list){
-  const dl = document.getElementById('wordlist');
-  dl.innerHTML = '';
-  list.forEach(w => {
-    const opt = document.createElement('option');
-    opt.value = w;
-    dl.appendChild(opt);
-  });
-}
-
-document.getElementById('goBtn').addEventListener('click', onGo);
-searchInput.addEventListener('keydown', (e)=>{ if (e.key === 'Enter') onGo(); });
-document.getElementById('backToggle').addEventListener('change', (e)=>{
-  if (isAnimating) { pendingMode = e.target.checked; return; }
-  showBacklinks = e.target.checked;
-  if (currentTitle) refreshCurrentNeighbors();
-});
-document.getElementById('trailToggle').addEventListener('change', (e)=>{
-  trailMode = e.target.checked;
-  if (!trailMode) {
-    clusterGroups.forEach((g,t)=>{
-      if (t !== currentTitle) { scene.remove(g.star); scene.remove(g.edge); clusterGroups.delete(t); centerPositions.delete(t); }
-    });
-    ghostQueue.length = 0;
-    updateTrail();
-  }
-});
 
 function centerCameraOnCurrent(){
   const pos = (centerPositions.get(currentTitle) || starGroup.position || new THREE.Vector3()).clone();
@@ -997,47 +799,16 @@ function centerCameraOnCurrent(){
   controls.update();
   renderOnce();
 }
-document.getElementById('resetCam').addEventListener('click', centerCameraOnCurrent);
 
-const helpModal = document.getElementById('helpModal');
-document.getElementById('helpBtn').addEventListener('click', ()=>{
-  helpModal.classList.remove('hidden');
-});
-document.getElementById('helpClose').addEventListener('click', ()=>{
-  helpModal.classList.add('hidden');
-});
-helpModal.addEventListener('click', (e)=>{
-  if(e.target === helpModal) helpModal.classList.add('hidden');
-});
-
-document.addEventListener('keydown', e => {
-  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
-  if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
-  const active = document.activeElement;
-  if (active && ['INPUT','TEXTAREA','SELECT'].includes(active.tagName)) return;
-  if (!previewOverlay.classList.contains('hidden')) closePreview();
-  if (helpModal && !helpModal.classList.contains('hidden')) helpModal.classList.add('hidden');
-
-  if (isAnimating) {
-    queueNav(e.key === 'ArrowLeft' ? 'left' : 'right');
-    e.preventDefault();
-    return;
-  }
-
-  if (e.key === 'ArrowLeft') {
-    if (goBackOne()) e.preventDefault();
-  } else if (e.key === 'ArrowRight') {
-    if (goForwardOne()) e.preventDefault();
-  }
-});
-function onGo(){
-  const val = searchInput.value.trim();
-  if (!val) return;
+function onGo(val){
+  const value = val.trim();
+  if (!value) return;
   closePreview();
   const help = document.getElementById('helpModal');
   if (help) help.classList.add('hidden');
   showBacklinks = false;
-  document.getElementById('backToggle').checked = false;
+  const backToggle = document.getElementById('backToggle');
+  if (backToggle) backToggle.checked = false;
   starCache.clear();
   summaryCache.clear();
   try { localStorage.clear(); } catch {}
@@ -1051,7 +822,22 @@ function onGo(){
   hovered = null;
   tooltip.classList.remove('show');
   clusterGroups.forEach(g=>{ scene.remove(g.star); scene.remove(g.edge); });
-  rebuildStar(val);
+  rebuildStar(value);
+}
+
+function setShowBacklinks(val){
+  if (isAnimating) { pendingMode = val; return; }
+  showBacklinks = val;
+  if (currentTitle) refreshCurrentNeighbors();
+}
+
+function setTrailMode(val){
+  trailMode = val;
+  if (!trailMode) {
+    clusterGroups.forEach((g,t)=>{ if (t !== currentTitle) { scene.remove(g.star); scene.remove(g.edge); clusterGroups.delete(t); centerPositions.delete(t); } });
+    ghostQueue.length = 0;
+    updateTrail();
+  }
 }
 
 // ====== Animation ======
@@ -1157,3 +943,17 @@ function createStarTexture(){
   ctx.fillRect(0,0,size,size);
   return new THREE.CanvasTexture(canvas);
 }
+export {
+  onGo,
+  setShowBacklinks,
+  setTrailMode,
+  centerCameraOnCurrent,
+  goBackOne,
+  goForwardOne,
+  jumpToBreadcrumb,
+  openPreview,
+  closePreview,
+  confirmPreview,
+  queueNav,
+  isAnimating
+};
