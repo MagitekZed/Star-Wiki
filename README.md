@@ -19,3 +19,15 @@ python3 -m http.server 8000
 
 ## Attribution
 Content from [Wikipedia](https://wikipedia.org) is available under the [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/) license.
+
+## Source layout
+
+All application code now lives under `src/` and is split into small modules:
+
+- `data/` – remote data fetching and caching.
+- `core/` – global state, constants, math helpers and Three.js scene setup.
+- `graph/` – star/edge construction, layout, travel animation and trail handling.
+- `ui/` – DOM driven pieces such as the sidebar, preview modal and breadcrumbs.
+- `input/` – mouse and keyboard wiring plus hover picking.
+
+`app.js` ties everything together and exposes the public API used by the UI handlers.
