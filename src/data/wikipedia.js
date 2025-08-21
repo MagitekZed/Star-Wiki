@@ -1,3 +1,5 @@
+// wikipedia.js
+// Fetches and caches Wikipedia data from the public API.
 const starCache = new Map();
 const MAX_CACHE = 64;
 let lastFetch = 0;
