@@ -218,6 +218,89 @@ async function getPageStar(title, backlinks=false){
   return star;
 }
 
+// ===== Wikidata "quick facts" =====
+const factsCache = new Map();
+// Curated properties -> friendly label + datatype. Order = display priority.
+const WD_PROPS = [
+  ['P569', 'Born', 'time'],
+  ['P570', 'Died', 'time'],
+  ['P19',  'Born in', 'entity'],
+  ['P27',  'Country', 'entity'],
+  ['P17',  'Country', 'entity'],
+  ['P571', 'Founded', 'time'],
+  ['P112', 'Founded by', 'entity'],
+  ['P159', 'Headquarters', 'entity'],
+  ['P36',  'Capital', 'entity'],
+  ['P1082','Population', 'quantity'],
+  ['P38',  'Currency', 'entity'],
+  ['P50',  'Author', 'entity'],
+  ['P57',  'Director', 'entity'],
+  ['P86',  'Composer', 'entity'],
+  ['P136', 'Genre', 'entity'],
+  ['P641', 'Sport', 'entity'],
+  ['P170', 'Creator', 'entity'],
+  ['P577', 'Released', 'time'],
+  ['P625', 'Coordinates', 'coord']
+];
+
+function formatWdTime(t){
+  const m = /^([+-])(\d+)-(\d{2})-(\d{2})/.exec(t || '');
+  if (!m) return null;
+  const sign = m[1] === '-' ? '-' : '';
+  const year = parseInt(m[2], 10);
+  const month = parseInt(m[3], 10);
+  const day = parseInt(m[4], 10);
+  if (!year) return null;
+  if (!month || !day) return `${sign}${year}`;
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return `${months[month-1]} ${day}, ${sign}${year}`;
+}
+
+async function fetchWikidataFacts(id){
+  if (!id) return [];
+  if (factsCache.has(id)) return factsCache.get(id);
+  let facts = [];
+  try {
+    const url = `https://www.wikidata.org/w/api.php?action=wbgetentities&ids=${encodeURIComponent(id)}&props=claims&languages=en&format=json&origin=*`;
+    const res = await wikiFetch(url);
+    const data = await res.json();
+    const claims = data.entities?.[id]?.claims || {};
+    const raw = [];
+    const toResolve = new Set();
+    for (const [prop, label, type] of WD_PROPS) {
+      const arr = claims[prop];
+      if (!arr || !arr.length) continue;
+      const snak = arr[0].mainsnak;
+      if (!snak || snak.snaktype !== 'value' || !snak.datavalue) continue;
+      const v = snak.datavalue.value;
+      if (type === 'time') {
+        const f = formatWdTime(v.time);
+        if (f) raw.push({ label, value: f });
+      } else if (type === 'quantity') {
+        const amt = parseFloat(v.amount);
+        if (isFinite(amt)) raw.push({ label, value: amt.toLocaleString() });
+      } else if (type === 'coord') {
+        if (typeof v.latitude === 'number') raw.push({ label, value: `${v.latitude.toFixed(2)}, ${v.longitude.toFixed(2)}` });
+      } else if (type === 'entity') {
+        const qid = v.id;
+        if (qid) { raw.push({ label, qid, value: null }); toResolve.add(qid); }
+      }
+    }
+    if (toResolve.size) {
+      const ids = [...toResolve].slice(0, 50).join('|');
+      const lurl = `https://www.wikidata.org/w/api.php?action=wbgetentities&ids=${encodeURIComponent(ids)}&props=labels&languages=en&format=json&origin=*`;
+      const lres = await wikiFetch(lurl);
+      const ldata = await lres.json();
+      for (const item of raw) {
+        if (item.qid) item.value = ldata.entities?.[item.qid]?.labels?.en?.value || null;
+      }
+    }
+    facts = raw.filter(f => f.value).slice(0, 6).map(f => ({ label: f.label, value: f.value }));
+  } catch {}
+  factsCache.set(id, facts);
+  return facts;
+}
+
 async function getRandomTitle(){
   try {
     const url = `https://en.wikipedia.org/w/api.php?action=query&list=random&rnnamespace=0&rnlimit=1&format=json&origin=*`;
@@ -229,4 +312,4 @@ async function getRandomTitle(){
   }
 }
 
-export { wikiFetch, fetchSummary, getPageStar, getRandomTitle, summaryCache, starCache, fetchPageMetaBatch };
+export { wikiFetch, fetchSummary, getPageStar, getRandomTitle, fetchWikidataFacts, summaryCache, starCache, fetchPageMetaBatch };

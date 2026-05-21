@@ -9,6 +9,7 @@ import {
   queueNav,
   closePreview,
   copyShareLink,
+  saveSnapshot,
   getHistory,
   loadPath,
   isAnimating
@@ -61,6 +62,9 @@ if (randomBtn) randomBtn.addEventListener('click', async ()=>{
 
 const copyLinkBtn = document.getElementById('copyLinkBtn');
 if (copyLinkBtn) copyLinkBtn.addEventListener('click', ()=> copyShareLink());
+
+const snapshotBtn = document.getElementById('snapshotBtn');
+if (snapshotBtn) snapshotBtn.addEventListener('click', ()=> saveSnapshot());
 
 // ===== Bookmarks (saved journeys) =====
 const BM_KEY = 'starwiki.bookmarks';

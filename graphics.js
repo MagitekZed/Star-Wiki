@@ -6,7 +6,10 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { VignetteShader } from 'three/addons/shaders/VignetteShader.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { getPageStar, fetchSummary, summaryCache, starCache } from "./wikipedia.js";
+import { Line2 } from 'three/addons/lines/Line2.js';
+import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
+import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
+import { getPageStar, fetchSummary, fetchWikidataFacts, summaryCache, starCache } from "./wikipedia.js";
 
 // ====== Scene setup ======
 const container = document.getElementById('canvas');
@@ -64,6 +67,8 @@ window.addEventListener('resize', () => {
   renderer.setSize(w, h);
   composer.setSize(w, h);
   bloomPass.setSize(w, h);
+  // Fat lines need their resolution kept in sync or their pixel width is wrong.
+  scene.traverse(o => { if (o.material && o.material.isLineMaterial) o.material.resolution.set(w, h); });
 });
 
 // Tooltip
@@ -154,6 +159,7 @@ scene.add(trailLine);
 // ====== Interaction ======
 const raycaster = new THREE.Raycaster();
 raycaster.params.Line.threshold = 0.1;
+raycaster.params.Line2 = { threshold: 6 }; // px tolerance for hovering fat lines
 const mouse = new THREE.Vector2();
 const mousePx = { x: 0, y: 0 }; // cursor position relative to the canvas, in px
 let hovered = null;
@@ -334,7 +340,14 @@ function placeNeighbor(title, posArray, group = starGroup, map = wordToMesh){
     : (showBacklinks ? materialBackNeighbor : materialNeighbor);
   const mesh = new THREE.Sprite(baseMat.clone());
   mesh.position.set(posArray[0], posArray[1], posArray[2]);
-  mesh.userData = { title, kind: 'neighbor', baseScale: 1.2 };
+  const th = seededHash(title);
+  mesh.userData = {
+    title, kind: 'neighbor', baseScale: 1.2,
+    // Per-star twinkle so the cluster breathes organically instead of in lockstep.
+    twFreq: 1.0 + (th % 100) / 100 * 1.8,   // 1.0 .. 2.8 Hz-ish
+    twPhase: ((th >> 7) % 628) / 100,        // 0 .. ~2π
+    twAmp: 0.07 + (th % 60) / 600            // 0.07 .. 0.17
+  };
   // start tiny; animate to base scale
   mesh.scale.set(0.001, 0.001, 1);
   _blooms.push({
@@ -349,19 +362,28 @@ function placeNeighbor(title, posArray, group = starGroup, map = wordToMesh){
 }
 
 function drawRay(centerTitle, targetTitle, startVec3, endVec3, rank, total, group = edgeGroup, colorOverride=null){
-  const geo = new THREE.BufferGeometry().setFromPoints([startVec3, endVec3]);
   const lineOpacity = colorOverride ? 1 : opacityFromRank(rank, total);
   const baseColor = colorOverride || (showBacklinks ? 0xffd36e : 0x7aa2f7);
-  const mat = new THREE.LineBasicMaterial({
-    color: baseColor,
+  // Fat, screen-space-width line with a bright-at-hub -> dim-at-neighbor gradient.
+  const geo = new LineGeometry();
+  geo.setPositions([startVec3.x, startVec3.y, startVec3.z, endVec3.x, endVec3.y, endVec3.z]);
+  const cStart = new THREE.Color(baseColor);
+  const cEnd = new THREE.Color(baseColor).multiplyScalar(0.3);
+  geo.setColors([cStart.r, cStart.g, cStart.b, cEnd.r, cEnd.g, cEnd.b]);
+  const baseLinewidth = colorOverride ? 2.6 : 1.8;
+  const baseLineOpacity = Math.min(1, lineOpacity + 0.15);
+  const mat = new LineMaterial({
+    linewidth: baseLinewidth,
+    vertexColors: true,
     transparent: true,
-    opacity: Math.min(1, lineOpacity + 0.15),
+    opacity: baseLineOpacity,
     blending: THREE.AdditiveBlending,
     depthWrite: false
   });
-  const line = new THREE.Line(geo, mat);
+  mat.resolution.set(container.clientWidth, container.clientHeight);
+  const line = new Line2(geo, mat);
   const mid = startVec3.clone().add(endVec3).multiplyScalar(0.5);
-  line.userData = { center: centerTitle, title: targetTitle, kind: 'ray', normalMat: mat, mid };
+  line.userData = { center: centerTitle, title: targetTitle, kind: 'ray', normalMat: mat, mid, baseLinewidth, baseLineOpacity, baseColorHex: baseColor };
   group.add(line);
 
   // Flow "comet" dot along the ray
@@ -650,8 +672,10 @@ let neighborFilter = '';
 let currentNeighbors = [];
 let currentChainPrev = null;
 let currentMeta = {};
+let sidebarToken = 0; // bumped each render so async facts can detect a stale sidebar
 
 function updateSidebar(center, neighbors, chainPrev, metaByTitle = {}){
+  const token = ++sidebarToken;
   const heading = document.getElementById('currentWord');
   heading.textContent = center.title;
 
@@ -673,6 +697,12 @@ function updateSidebar(center, neighbors, chainPrev, metaByTitle = {}){
   link.target = '_blank';
   link.textContent = 'View on Wikipedia';
   summaryDiv.appendChild(link);
+  if (center.wikidataId) {
+    const factsBox = document.createElement('div');
+    factsBox.className = 'facts';
+    summaryDiv.appendChild(factsBox);
+    renderFacts(center.wikidataId, factsBox, token);
+  }
   if (Array.isArray(center.categories) && center.categories.length) {
     const chips = document.createElement('div');
     chips.className = 'chips';
@@ -721,6 +751,26 @@ function updateSidebar(center, neighbors, chainPrev, metaByTitle = {}){
   }
 
   renderNeighborList();
+}
+
+async function renderFacts(wikidataId, box, token){
+  let facts = [];
+  try {
+    facts = await fetchWikidataFacts(wikidataId);
+  } catch {}
+  if (token !== sidebarToken) return;       // navigated away while fetching
+  if (!box.isConnected || !facts.length) { box.remove(); return; }
+  const dl = document.createElement('dl');
+  dl.className = 'facts-dl';
+  facts.forEach(f => {
+    const dt = document.createElement('dt');
+    dt.textContent = f.label;
+    const dd = document.createElement('dd');
+    dd.textContent = f.value;
+    dl.appendChild(dt);
+    dl.appendChild(dd);
+  });
+  box.appendChild(dl);
 }
 
 function renderNeighborList(){
@@ -964,6 +1014,25 @@ async function copyShareLink(){
   showToast('Copy blocked — link is in the address bar');
 }
 
+function saveSnapshot(){
+  // Render synchronously, then capture the WebGL buffer in the same task (so we
+  // don't need preserveDrawingBuffer, which would cost performance every frame).
+  renderOnce();
+  renderer.domElement.toBlob((blob)=>{
+    if (!blob) { showToast('Snapshot failed'); return; }
+    const name = (currentTitle || 'starwiki').replace(/[^\w.-]+/g, '_');
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `starwiki-${name}.png`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showToast('Snapshot saved');
+  }, 'image/png');
+}
+
 function jumpToBreadcrumb(index){
   if (index === historyIndex) return;
   if (isAnimating) { queueNav({ type:'breadcrumb', index }); return; }
@@ -987,7 +1056,10 @@ function resetHovered(){
     if (prevMat && !SHARED_MATERIALS.has(prevMat) && typeof prevMat.dispose === 'function') prevMat.dispose();
     if(obj.userData.baseScale) obj.scale.set(obj.userData.baseScale, obj.userData.baseScale, 1);
   } else if (obj.userData.normalMat) {
-    obj.material = obj.userData.normalMat;
+    // Restore the fat line's base width/opacity after hover.
+    const m = obj.userData.normalMat;
+    if (obj.userData.baseLinewidth != null) m.linewidth = obj.userData.baseLinewidth;
+    if (obj.userData.baseLineOpacity != null) m.opacity = obj.userData.baseLineOpacity;
   }
 }
 
@@ -1020,7 +1092,11 @@ function updateHover(){
       tooltip.style.top = y + 'px';
       tooltip.textContent = obj.userData.title;
     } else if (obj.userData.title && obj.userData.kind !== 'center') {
-      if (isNewHover) obj.material = materialRayHover;
+      if (isNewHover && obj.userData.normalMat) {
+        // Thicken + brighten the fat line on hover (mutate, don't swap material).
+        obj.userData.normalMat.linewidth = (obj.userData.baseLinewidth || 2) * 2.4;
+        obj.userData.normalMat.opacity = 1;
+      }
       // Position the ray's tooltip at the cursor (it follows the mouse along the
       // spoke) rather than pinning it to the ray's midpoint.
       tooltip.style.left = mousePx.x + 'px';
@@ -1188,22 +1264,25 @@ function animate(){
       obj.position.copy(pos);
       const s = 0.6 + 0.25 * Math.sin((now + d.phase) * 6.0);
       obj.scale.set(s, s, 1);
-    } else if (obj.isLine && obj.userData && obj.userData.normalMat) {
-      if (obj.userData.normalMat.color?.getHex() === RETURN_COLOR) {
-        obj.userData.normalMat.opacity = 0.65 + 0.35 * Math.sin(now * 2.5);
-      }
+    } else if (obj.userData && obj.userData.kind === 'ray' && obj.userData.baseColorHex === RETURN_COLOR && obj.userData.normalMat) {
+      obj.userData.normalMat.opacity = 0.65 + 0.35 * Math.sin(now * 2.5);
     }
   });
 
-  const t = performance.now() * 0.003;
-  starGroup.children.forEach((obj, i) => {
+  starGroup.children.forEach((obj) => {
     if (obj.userData && obj.userData.kind === 'neighbor' && (!hovered || hovered.object !== obj)) {
       const base = obj.userData.baseScale || 1;
-      const s = base * (1 + 0.2 * Math.sin(t + i));
+      const f = obj.userData.twFreq || 2;
+      const p = obj.userData.twPhase || 0;
+      const a = obj.userData.twAmp || 0.12;
+      const s = base * (1 + a * Math.sin(now * f + p));
       obj.scale.set(s, s, 1);
     }
   });
-  bgStars.rotation.y += 0.0003;
+  // Parallax: rotate each background layer at its own rate for a sense of depth.
+  bgStars.children.forEach(layer => {
+    if (layer.userData && layer.userData.rotSpeed) layer.rotation.y += layer.userData.rotSpeed;
+  });
   composer.render();
 }
 function renderOnce(){ composer.render(); }
@@ -1227,21 +1306,78 @@ function init(){
 init();
 
 // ====== Helpers ======
-function createBackgroundStars(){
-  const count = 1000;
+function createNebulaTexture(){
+  const w = 1024, h = 512;
+  const canvas = document.createElement('canvas');
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#06070d';
+  ctx.fillRect(0, 0, w, h);
+  // Soft additive gas clouds keyed to the app's accent palette.
+  const palette = [
+    'rgba(80,100,220,0.20)',  // indigo
+    'rgba(40,165,195,0.20)',  // teal
+    'rgba(165,65,185,0.17)',  // magenta
+    'rgba(95,115,240,0.15)',  // periwinkle
+    'rgba(35,135,175,0.14)'   // cyan
+  ];
+  ctx.globalCompositeOperation = 'lighter';
+  for (let i = 0; i < 18; i++) {
+    const color = palette[i % palette.length];
+    const x = Math.random() * w, y = Math.random() * h;
+    const r = 90 + Math.random() * 260;
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, color);
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, w, h);
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+function createStarLayer(count, rMin, rMax, size, opacity, rotSpeed){
   const positions = new Float32Array(count * 3);
+  const colors = new Float32Array(count * 3);
+  const c = new THREE.Color();
   for (let i = 0; i < count; i++) {
-    const r = 600 + Math.random() * 400;
+    const r = rMin + Math.random() * (rMax - rMin);
     const theta = Math.random() * Math.PI * 2;
     const phi = Math.acos(2 * Math.random() - 1);
-    positions[i*3] = r * Math.sin(phi) * Math.cos(theta);
+    positions[i*3]   = r * Math.sin(phi) * Math.cos(theta);
     positions[i*3+1] = r * Math.sin(phi) * Math.sin(theta);
     positions[i*3+2] = r * Math.cos(phi);
+    const roll = Math.random();
+    if (roll < 0.10) c.setHSL(0.08, 0.55, 0.80);      // warm amber
+    else if (roll < 0.32) c.setHSL(0.60, 0.55, 0.85); // blue
+    else c.setHSL(0.60, 0.10, 0.96);                  // near-white
+    colors[i*3] = c.r; colors[i*3+1] = c.g; colors[i*3+2] = c.b;
   }
   const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions,3));
-  const mat = new THREE.PointsMaterial({ color: 0xffffff, size: 1.2, sizeAttenuation: true, transparent: true, opacity: 0.6, depthWrite: false });
-  return new THREE.Points(geo, mat);
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  const mat = new THREE.PointsMaterial({ size, sizeAttenuation: true, transparent: true, opacity, depthWrite: false, vertexColors: true });
+  const pts = new THREE.Points(geo, mat);
+  pts.userData.rotSpeed = rotSpeed;
+  return pts;
+}
+
+function createBackgroundStars(){
+  const group = new THREE.Group();
+  // Nebula skybox: a soft colored backdrop so the void has depth and color.
+  const nebula = new THREE.Mesh(
+    new THREE.SphereGeometry(1600, 48, 32),
+    new THREE.MeshBasicMaterial({ map: createNebulaTexture(), side: THREE.BackSide, depthWrite: false, depthTest: false })
+  );
+  nebula.renderOrder = -1;
+  nebula.userData.rotSpeed = 0.00004;
+  group.add(nebula);
+  // Parallax star layers (far/dim/small -> near/bright/large), each drifting slower than the next.
+  group.add(createStarLayer(700, 1100, 1500, 1.0, 0.45, 0.00008));
+  group.add(createStarLayer(500, 750, 1050, 1.7, 0.70, 0.00018));
+  group.add(createStarLayer(300, 480, 740, 2.5, 0.95, 0.00032));
+  return group;
 }
 
 function createStarTexture(){
@@ -1290,6 +1426,7 @@ export {
   confirmPreview,
   queueNav,
   copyShareLink,
+  saveSnapshot,
   getHistory,
   loadPath,
   isAnimating
