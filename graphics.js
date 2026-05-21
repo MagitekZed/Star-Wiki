@@ -142,6 +142,7 @@ scene.add(trailLine);
 const raycaster = new THREE.Raycaster();
 raycaster.params.Line.threshold = 0.1;
 const mouse = new THREE.Vector2();
+const mousePx = { x: 0, y: 0 }; // cursor position relative to the canvas, in px
 let hovered = null;
 let previewTarget = null;
 
@@ -149,6 +150,8 @@ container.addEventListener('mousemove', (e)=>{
   const rect = renderer.domElement.getBoundingClientRect();
   mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
   mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+  mousePx.x = e.clientX - rect.left;
+  mousePx.y = e.clientY - rect.top;
 });
 
 container.addEventListener('click', (e)=>{
@@ -405,8 +408,13 @@ function rebuildStar(title, addToHistory=true){
       scene.remove(g.star); scene.remove(g.edge);
     });
     clearGroup(starGroup); clearGroup(edgeGroup);
-    // Ensure the reusable groups are attached to the scene again
+    // Ensure the reusable groups are attached to the scene again, and reset their
+    // position — after travelling they were left at the last travel target, which
+    // otherwise renders a freshly searched/random page far off-screen.
     scene.add(starGroup); scene.add(edgeGroup);
+    starGroup.position.set(0, 0, 0);
+    edgeGroup.position.set(0, 0, 0);
+    starGroup.visible = true; edgeGroup.visible = true;
     wordToMesh.clear();
     clusterGroups.clear(); centerPositions.clear(); ghostQueue.length = 0;
     trailGeometry.setFromPoints([]);
@@ -582,17 +590,17 @@ async function travelToNeighbor(targetTitle, addToHistory=true){
 
     if (t < 1) requestAnimationFrame(tick);
     else {
-      if (trailMode) {
-        ghostify(currentTitle);
-        ghostQueue.push(currentTitle);
-        if (ghostQueue.length > MAX_GHOSTS) {
-          const old = ghostQueue.shift();
-          const grp = clusterGroups.get(old);
-          if (grp) { disposeGroup(grp.star); disposeGroup(grp.edge); scene.remove(grp.star); scene.remove(grp.edge); clusterGroups.delete(old); centerPositions.delete(old); }
-        }
-      } else {
-        const grp = clusterGroups.get(currentTitle);
-        if (grp) { disposeGroup(grp.star); disposeGroup(grp.edge); scene.remove(grp.star); scene.remove(grp.edge); clusterGroups.delete(currentTitle); centerPositions.delete(currentTitle); }
+      // Always retain a bounded trail of ghost clusters; trailMode only controls
+      // whether they are visible, so toggling Trail off/on hides/shows the
+      // existing trail instead of destroying and rebuilding it.
+      ghostify(currentTitle);
+      const prevGrp = clusterGroups.get(currentTitle);
+      if (prevGrp) { prevGrp.star.visible = trailMode; prevGrp.edge.visible = trailMode; }
+      ghostQueue.push(currentTitle);
+      if (ghostQueue.length > MAX_GHOSTS) {
+        const old = ghostQueue.shift();
+        const grp = clusterGroups.get(old);
+        if (grp) { disposeGroup(grp.star); disposeGroup(grp.edge); scene.remove(grp.star); scene.remove(grp.edge); clusterGroups.delete(old); centerPositions.delete(old); }
       }
       starGroup = newStar;
       edgeGroup = newEdge;
@@ -600,7 +608,8 @@ async function travelToNeighbor(targetTitle, addToHistory=true){
       currentTitle = star.center.title;
       clusterGroups.set(currentTitle, { star: starGroup, edge: edgeGroup });
       centerPositions.set(currentTitle, to.clone());
-      if (trailMode) updateTrail(); else trailGeometry.setFromPoints([]);
+      updateTrail();
+      trailLine.visible = trailMode;
       visited.add(currentTitle);
       updateBreadcrumbs();
       hovered = null;
@@ -905,12 +914,32 @@ function parsePathFromHash(){
 }
 
 async function copyShareLink(){
+  const url = location.href;
+  // Preferred path: async Clipboard API (needs a secure context + user gesture).
   try {
-    await navigator.clipboard.writeText(location.href);
-    showToast('Link copied to clipboard');
-  } catch {
-    showToast('Could not copy link');
-  }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(url);
+      showToast('Link copied to clipboard');
+      return;
+    }
+  } catch {}
+  // Fallback: legacy execCommand via a temporary textarea.
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = url;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.top = '-1000px';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    showToast(ok ? 'Link copied to clipboard' : 'Copy blocked — link is in the address bar');
+    return;
+  } catch {}
+  showToast('Copy blocked — link is in the address bar');
 }
 
 function jumpToBreadcrumb(index){
@@ -970,13 +999,10 @@ function updateHover(){
       tooltip.textContent = obj.userData.title;
     } else if (obj.userData.title && obj.userData.kind !== 'center') {
       if (isNewHover) obj.material = materialRayHover;
-      const worldMid = obj.parent.localToWorld(obj.userData.mid.clone());
-      const rect = renderer.domElement.getBoundingClientRect();
-      const v = worldMid.project(camera);
-      const x = (v.x * 0.5 + 0.5) * rect.width;
-      const y = (-v.y * 0.5 + 0.5) * rect.height;
-      tooltip.style.left = x + 'px';
-      tooltip.style.top = y + 'px';
+      // Position the ray's tooltip at the cursor (it follows the mouse along the
+      // spoke) rather than pinning it to the ray's midpoint.
+      tooltip.style.left = mousePx.x + 'px';
+      tooltip.style.top = mousePx.y + 'px';
       tooltip.textContent = obj.userData.title;
     }
   } else {
@@ -1031,11 +1057,14 @@ function setShowBacklinks(val){
 
 function setTrailMode(val){
   trailMode = val;
-  if (!trailMode) {
-    clusterGroups.forEach((g,t)=>{ if (t !== currentTitle) { disposeGroup(g.star); disposeGroup(g.edge); scene.remove(g.star); scene.remove(g.edge); clusterGroups.delete(t); centerPositions.delete(t); } });
-    ghostQueue.length = 0;
-    updateTrail();
-  }
+  trailLine.visible = val;
+  // Hide/show the existing ghost clusters rather than destroying them.
+  clusterGroups.forEach((g, t)=>{
+    if (t === currentTitle) return;
+    g.star.visible = val;
+    g.edge.visible = val;
+  });
+  if (val) updateTrail();
 }
 
 function getHistory(){ return history.slice(); }
