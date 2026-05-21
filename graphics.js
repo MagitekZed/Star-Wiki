@@ -220,6 +220,13 @@ function ghostify(title){
     }
   });
   grp.edge.traverse(obj=>{
+    // The flowing "comet" dots are only animated for the current cluster, so on
+    // a ghost they freeze mid-ray and bloom into bright static blobs. Hide them;
+    // the faded ray lines remain to show the trail.
+    if (obj.userData && obj.userData.kind === 'rayDot') {
+      obj.visible = false;
+      return;
+    }
     if(obj.material && 'opacity' in obj.material){
       obj.material.opacity = fadeEdge;
       obj.material.transparent = true;
