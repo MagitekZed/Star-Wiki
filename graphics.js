@@ -3,6 +3,8 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { VignetteShader } from 'three/addons/shaders/VignetteShader.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { getPageStar, fetchSummary, summaryCache, starCache } from "./wikipedia.js";
 
@@ -15,7 +17,7 @@ renderer.outputColorSpace = THREE.SRGBColorSpace;
 container.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x0a0b10);
+scene.background = new THREE.Color(0x07080f);
 
 const camera = new THREE.PerspectiveCamera(60, container.clientWidth/container.clientHeight, 0.1, 3000);
 const DEFAULT_CAM_POS = new THREE.Vector3(0, 10, 28);
@@ -40,6 +42,10 @@ const bloomPass = new UnrealBloomPass(
   0.1   // threshold — only the bright additive stars/rays bloom
 );
 composer.addPass(bloomPass);
+const vignettePass = new ShaderPass(VignetteShader);
+vignettePass.uniforms.offset.value = 1.05;
+vignettePass.uniforms.darkness.value = 1.25;
+composer.addPass(vignettePass);
 composer.addPass(new OutputPass());
 
 // Resize handling
@@ -87,25 +93,25 @@ const materialNeighbor = new THREE.SpriteMaterial({
 });
 const materialNeighborHover = new THREE.SpriteMaterial({
   map: starTexture,
-  color: 0x96bdfc,
+  color: 0xa9c6ff,
   blending: THREE.AdditiveBlending,
   transparent: true
 });
 const materialBackNeighbor = new THREE.SpriteMaterial({
   map: starTexture,
-  color: 0xffd700,
+  color: 0xffd36e,
   blending: THREE.AdditiveBlending,
   transparent: true
 });
 const materialBackNeighborHover = new THREE.SpriteMaterial({
   map: starTexture,
-  color: 0xffe580,
+  color: 0xffe9b0,
   blending: THREE.AdditiveBlending,
   transparent: true
 });
 const materialVisited = new THREE.SpriteMaterial({
   map: starTexture,
-  color: 0x4b5563,
+  color: 0x4b5570,
   blending: THREE.AdditiveBlending,
   transparent: true
 });
@@ -322,7 +328,7 @@ function placeNeighbor(title, posArray, group = starGroup, map = wordToMesh){
 function drawRay(centerTitle, targetTitle, startVec3, endVec3, rank, total, group = edgeGroup, colorOverride=null){
   const geo = new THREE.BufferGeometry().setFromPoints([startVec3, endVec3]);
   const lineOpacity = colorOverride ? 1 : opacityFromRank(rank, total);
-  const baseColor = colorOverride || (showBacklinks ? 0xffd700 : 0x7aa2f7);
+  const baseColor = colorOverride || (showBacklinks ? 0xffd36e : 0x7aa2f7);
   const mat = new THREE.LineBasicMaterial({
     color: baseColor,
     transparent: true,
@@ -375,7 +381,7 @@ function buildStarInto(centerTitle, data, gStar, gEdge, map, prevTitle=null, pre
     drawRay(centerTitle, prevTitle, new THREE.Vector3(0,0,0), prevVec, 0, 1, gEdge, RETURN_COLOR);
   }
 
-  updateSidebar(data.center, filtered, prevTitle);
+  updateSidebar(data.center, filtered, prevTitle, data.metaByTitle);
 }
 
 function rebuildStar(title, addToHistory=true){
@@ -607,7 +613,14 @@ async function travelToNeighbor(targetTitle, addToHistory=true){
 }
 
 // ====== Sidebar ======
-function updateSidebar(center, neighbors, chainPrev){
+// ===== Neighbor list sort/filter state =====
+let neighborSort = 'relevance';
+let neighborFilter = '';
+let currentNeighbors = [];
+let currentChainPrev = null;
+let currentMeta = {};
+
+function updateSidebar(center, neighbors, chainPrev, metaByTitle = {}){
   const heading = document.getElementById('currentWord');
   heading.textContent = center.title;
 
@@ -629,20 +642,81 @@ function updateSidebar(center, neighbors, chainPrev){
   link.target = '_blank';
   link.textContent = 'View on Wikipedia';
   summaryDiv.appendChild(link);
+  if (Array.isArray(center.categories) && center.categories.length) {
+    const chips = document.createElement('div');
+    chips.className = 'chips';
+    center.categories.slice(0, 8).forEach(cat => {
+      const chip = document.createElement('span');
+      chip.className = 'chip';
+      chip.textContent = cat;
+      chip.title = cat;
+      chips.appendChild(chip);
+    });
+    summaryDiv.appendChild(chips);
+  }
   summaryCache.set(center.title, { title: center.title, extract: center.summary || '', thumbnail: center.thumbnailUrl || null });
 
+  currentNeighbors = neighbors.slice();
+  currentChainPrev = chainPrev || null;
+  currentMeta = metaByTitle || {};
+  neighborFilter = '';
+
+  const controls = document.getElementById('neighborControls');
+  if (controls) {
+    controls.innerHTML = '';
+    if (currentNeighbors.length) {
+      const filterInput = document.createElement('input');
+      filterInput.type = 'text';
+      filterInput.className = 'nb-filter';
+      filterInput.placeholder = 'Filter links…';
+      filterInput.value = neighborFilter;
+      filterInput.setAttribute('aria-label', 'Filter links');
+      filterInput.addEventListener('input', ()=>{ neighborFilter = filterInput.value; renderNeighborList(); });
+
+      const sortSel = document.createElement('select');
+      sortSel.className = 'nb-sort';
+      sortSel.setAttribute('aria-label', 'Sort links');
+      [['relevance','Relevance'], ['alpha','A–Z'], ['length','Longest']].forEach(([v, label])=>{
+        const o = document.createElement('option');
+        o.value = v; o.textContent = label;
+        if (v === neighborSort) o.selected = true;
+        sortSel.appendChild(o);
+      });
+      sortSel.addEventListener('change', ()=>{ neighborSort = sortSel.value; renderNeighborList(); });
+
+      controls.appendChild(filterInput);
+      controls.appendChild(sortSel);
+    }
+  }
+
+  renderNeighborList();
+}
+
+function renderNeighborList(){
   const container = document.getElementById('neighbors');
+  if (!container) return;
   container.innerHTML = '';
-  if (chainPrev) {
+
+  if (currentChainPrev) {
     const backRow = document.createElement('div');
     backRow.className = 'neighbor return';
     backRow.tabIndex = 0;
-    backRow.textContent = `Back to ${chainPrev}`;
+    backRow.textContent = `Back to ${currentChainPrev}`;
     backRow.addEventListener('click', ()=> goBackOne());
     backRow.addEventListener('keydown', e=>{ if(e.key==='Enter') goBackOne(); });
     container.appendChild(backRow);
   }
-  neighbors.forEach(nb => {
+
+  let list = currentNeighbors.slice();
+  const f = neighborFilter.trim().toLowerCase();
+  if (f) list = list.filter(t => t.toLowerCase().includes(f));
+  if (neighborSort === 'alpha') {
+    list.sort((a, b) => a.localeCompare(b));
+  } else if (neighborSort === 'length') {
+    list.sort((a, b) => ((currentMeta[b] && currentMeta[b].length) || 0) - ((currentMeta[a] && currentMeta[a].length) || 0));
+  }
+
+  list.forEach(nb => {
     const row = document.createElement('div');
     row.className = 'neighbor';
     row.tabIndex = 0;
@@ -680,10 +754,16 @@ function updateSidebar(center, neighbors, chainPrev){
     container.appendChild(row);
     fetchNeighborInfo(nb, row);
   });
-  if (neighbors.length === 0) {
+
+  if (currentNeighbors.length === 0) {
     const row = document.createElement('div');
     row.className = 'hint';
     row.textContent = 'No links found';
+    container.appendChild(row);
+  } else if (list.length === 0) {
+    const row = document.createElement('div');
+    row.className = 'hint';
+    row.textContent = 'No links match your filter';
     container.appendChild(row);
   }
 }
@@ -802,6 +882,35 @@ function updateBreadcrumbs(){
       nav.appendChild(sep);
     }
   });
+  syncHash();
+}
+
+// ====== Shareable URL (hash routing) ======
+function syncHash(){
+  if (!history.length) return;
+  const target = '#/' + history.map(encodeURIComponent).join('/');
+  if (location.hash !== target) {
+    // replaceState avoids stacking a new browser-history entry per hop.
+    history.length && window.history.replaceState(null, '', target);
+  }
+}
+
+function parsePathFromHash(){
+  const h = location.hash;
+  if (!h || !h.startsWith('#/')) return null;
+  const path = h.slice(2).split('/')
+    .map(s => { try { return decodeURIComponent(s); } catch { return s; } })
+    .filter(Boolean);
+  return path.length ? path : null;
+}
+
+async function copyShareLink(){
+  try {
+    await navigator.clipboard.writeText(location.href);
+    showToast('Link copied to clipboard');
+  } catch {
+    showToast('Could not copy link');
+  }
 }
 
 function jumpToBreadcrumb(index){
@@ -929,6 +1038,35 @@ function setTrailMode(val){
   }
 }
 
+function getHistory(){ return history.slice(); }
+
+// Restore a multi-step journey (from a shared hash URL or a saved bookmark).
+// Lands on the last title with the full breadcrumb chain intact.
+function loadPath(path){
+  if (!Array.isArray(path) || !path.length) return;
+  if (isAnimating) return;
+  closePreview();
+  const help = document.getElementById('helpModal');
+  if (help) help.classList.add('hidden');
+  showBacklinks = false;
+  const backToggle = document.getElementById('backToggle');
+  if (backToggle) backToggle.checked = false;
+  visited.clear();
+  hovered = null;
+  tooltip.classList.remove('show');
+  clusterGroups.forEach(g=>{
+    if (g.star !== starGroup) disposeGroup(g.star);
+    if (g.edge !== edgeGroup) disposeGroup(g.edge);
+    scene.remove(g.star); scene.remove(g.edge);
+  });
+  history = path.slice();
+  historyIndex = history.length - 1;
+  controls.target.set(0,0,0);
+  camera.position.copy(DEFAULT_CAM_POS);
+  controls.update();
+  rebuildStar(history[historyIndex], false);
+}
+
 // ====== Animation ======
 function fadeInGroups(){
   starGroup.traverse(obj => {
@@ -1031,6 +1169,8 @@ function init(){
   document.getElementById('loading').classList.add('hidden');
   updateBreadcrumbs();
   animate();
+  const path = parsePathFromHash();
+  if (path) loadPath(path);
 }
 
 init();
@@ -1098,5 +1238,8 @@ export {
   closePreview,
   confirmPreview,
   queueNav,
+  copyShareLink,
+  getHistory,
+  loadPath,
   isAnimating
 };

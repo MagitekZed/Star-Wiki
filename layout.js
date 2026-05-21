@@ -1,4 +1,4 @@
-import { wikiFetch } from './wikipedia.js';
+import { wikiFetch, getRandomTitle } from './wikipedia.js';
 import {
   onGo,
   setShowBacklinks,
@@ -8,6 +8,9 @@ import {
   goForwardOne,
   queueNav,
   closePreview,
+  copyShareLink,
+  getHistory,
+  loadPath,
   isAnimating
 } from './graphics.js';
 
@@ -43,6 +46,102 @@ document.getElementById('backToggle').addEventListener('change', (e)=>{
 });
 document.getElementById('trailToggle').addEventListener('change', (e)=>{
   setTrailMode(e.target.checked);
+});
+
+const randomBtn = document.getElementById('randomBtn');
+if (randomBtn) randomBtn.addEventListener('click', async ()=>{
+  randomBtn.disabled = true;
+  try {
+    const title = await getRandomTitle();
+    if (title) onGo(title);
+  } finally {
+    randomBtn.disabled = false;
+  }
+});
+
+const copyLinkBtn = document.getElementById('copyLinkBtn');
+if (copyLinkBtn) copyLinkBtn.addEventListener('click', ()=> copyShareLink());
+
+// ===== Bookmarks (saved journeys) =====
+const BM_KEY = 'starwiki.bookmarks';
+const bookmarksPanel = document.getElementById('bookmarksPanel');
+const bookmarksBtn = document.getElementById('bookmarksBtn');
+const saveBtn = document.getElementById('saveBtn');
+
+function getBookmarks(){ try { return JSON.parse(localStorage.getItem(BM_KEY) || '[]'); } catch { return []; } }
+function setBookmarks(list){ try { localStorage.setItem(BM_KEY, JSON.stringify(list)); } catch {} }
+
+function renderBookmarks(){
+  if (!bookmarksPanel) return;
+  const list = getBookmarks();
+  bookmarksPanel.innerHTML = '';
+  if (!list.length) {
+    const empty = document.createElement('div');
+    empty.className = 'menu-empty';
+    empty.textContent = 'No saved journeys yet.';
+    bookmarksPanel.appendChild(empty);
+    return;
+  }
+  list.forEach((bm) => {
+    const row = document.createElement('div');
+    row.className = 'bookmark';
+
+    const load = document.createElement('button');
+    load.className = 'bm-load';
+    const name = document.createElement('div');
+    name.className = 'bm-name';
+    name.textContent = bm.name;
+    name.title = bm.name;
+    const sub = document.createElement('div');
+    sub.className = 'bm-sub';
+    sub.textContent = `${bm.path.length} stop${bm.path.length > 1 ? 's' : ''}`;
+    load.appendChild(name);
+    load.appendChild(sub);
+    load.addEventListener('click', ()=>{
+      loadPath(bm.path);
+      bookmarksPanel.classList.add('hidden');
+    });
+
+    const del = document.createElement('button');
+    del.className = 'bm-del';
+    del.textContent = '✕';
+    del.title = 'Delete journey';
+    del.setAttribute('aria-label', 'Delete journey');
+    del.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      const cur = getBookmarks().filter(b => b.savedAt !== bm.savedAt);
+      setBookmarks(cur);
+      renderBookmarks();
+    });
+
+    row.appendChild(load);
+    row.appendChild(del);
+    bookmarksPanel.appendChild(row);
+  });
+}
+
+if (saveBtn) saveBtn.addEventListener('click', ()=>{
+  const path = getHistory();
+  if (!path.length) return;
+  const def = path.length > 1 ? `${path[0]} → ${path[path.length - 1]}` : path[0];
+  const name = prompt('Name this journey:', def);
+  if (name === null) return; // cancelled
+  const list = getBookmarks();
+  list.unshift({ name: name.trim() || def, path, savedAt: Date.now() });
+  setBookmarks(list);
+  renderBookmarks();
+});
+
+if (bookmarksBtn) bookmarksBtn.addEventListener('click', (e)=>{
+  e.stopPropagation();
+  renderBookmarks();
+  bookmarksPanel.classList.toggle('hidden');
+});
+
+document.addEventListener('click', (e)=>{
+  if (!bookmarksPanel || bookmarksPanel.classList.contains('hidden')) return;
+  if (e.target.closest('.menu')) return;
+  bookmarksPanel.classList.add('hidden');
 });
 
 document.getElementById('resetCam').addEventListener('click', centerCameraOnCurrent);

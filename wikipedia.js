@@ -218,4 +218,15 @@ async function getPageStar(title, backlinks=false){
   return star;
 }
 
-export { wikiFetch, fetchSummary, getPageStar, summaryCache, starCache, fetchPageMetaBatch };
+async function getRandomTitle(){
+  try {
+    const url = `https://en.wikipedia.org/w/api.php?action=query&list=random&rnnamespace=0&rnlimit=1&format=json&origin=*`;
+    const res = await wikiFetch(url);
+    const data = await res.json();
+    return data.query?.random?.[0]?.title || null;
+  } catch {
+    return null;
+  }
+}
+
+export { wikiFetch, fetchSummary, getPageStar, getRandomTitle, summaryCache, starCache, fetchPageMetaBatch };

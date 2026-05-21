@@ -4,6 +4,9 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>StarWiki • Wikipedia Rabbit Hole Explorer</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="styles.css" />
     <script type="importmap">
     {
@@ -18,15 +21,26 @@
     <div id="loading" class="overlay"><span id="loadingText">Loading…</span></div>
     <button id="helpBtn" class="help-btn" title="Help">?</button>
     <header>
-      <h1>StarWiki • Wikipedia Rabbit Hole Explorer</h1>
+      <h1 class="brand">
+        <svg class="brand-mark" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M12 1.8l2.7 6.9 7.4.5-5.7 4.8 1.9 7.2L12 17.9 5.7 21.2l1.9-7.2L1.9 9.2l7.4-.5z"/></svg>
+        <span class="brand-name">Star<span class="brand-accent">Wiki</span></span>
+        <span class="brand-tag">Wikipedia Rabbit Hole Explorer</span>
+      </h1>
       <div class="controls">
         <input id="search" type="text" placeholder="Type a page title (e.g., Earth)" list="wordlist" />
         <datalist id="wordlist"></datalist>
         <button id="goBtn">Search</button>
+        <button id="randomBtn" title="Open a random article">Surprise me</button>
         <label class="toggle"><input type="checkbox" id="backToggle" /> Backlinks
           <span class="info-icon">ℹ️<span class="info-text">Show pages that link back to the current page.</span></span>
         </label>
         <label class="toggle"><input type="checkbox" id="trailToggle" checked /> Trail</label>
+        <button id="copyLinkBtn" class="btn-2" title="Copy a shareable link to this journey">Copy link</button>
+        <button id="saveBtn" class="btn-2" title="Save this journey">Save</button>
+        <div class="menu">
+          <button id="bookmarksBtn" class="btn-2" title="Saved journeys">Bookmarks ▾</button>
+          <div id="bookmarksPanel" class="menu-panel hidden"></div>
+        </div>
         <button id="resetCam" title="Reset camera">🏠 Reset Camera</button>
       </div>
     </header>
@@ -39,6 +53,7 @@
         <h2 id="currentWord">Select a page</h2>
         <div id="summary"></div>
         <div class="hint">Hover a ray to see its title; click to travel. Scroll to zoom. Drag to orbit.</div>
+        <div id="neighborControls"></div>
         <div id="neighbors"></div>
       </aside>
     </main>
