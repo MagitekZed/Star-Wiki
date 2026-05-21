@@ -90,40 +90,46 @@ const materialCenter = new THREE.SpriteMaterial({
   map: starTexture,
   color: 0xffffff,
   blending: THREE.AdditiveBlending,
-  transparent: true
+  transparent: true,
+  depthWrite: false
 });
 const materialNeighbor = new THREE.SpriteMaterial({
   map: starTexture,
   color: 0x7aa2f7,
   blending: THREE.AdditiveBlending,
-  transparent: true
+  transparent: true,
+  depthWrite: false
 });
 const materialNeighborHover = new THREE.SpriteMaterial({
   map: starTexture,
   color: 0xa9c6ff,
   blending: THREE.AdditiveBlending,
-  transparent: true
+  transparent: true,
+  depthWrite: false
 });
 const materialBackNeighbor = new THREE.SpriteMaterial({
   map: starTexture,
   color: 0xffd36e,
   blending: THREE.AdditiveBlending,
-  transparent: true
+  transparent: true,
+  depthWrite: false
 });
 const materialBackNeighborHover = new THREE.SpriteMaterial({
   map: starTexture,
   color: 0xffe9b0,
   blending: THREE.AdditiveBlending,
-  transparent: true
+  transparent: true,
+  depthWrite: false
 });
 const materialVisited = new THREE.SpriteMaterial({
   map: starTexture,
   color: 0x4b5570,
   blending: THREE.AdditiveBlending,
-  transparent: true
+  transparent: true,
+  depthWrite: false
 });
 const RETURN_COLOR = 0xf7768e;
-const materialRayHover = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 1, linewidth: 2 });
+const materialRayHover = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 1, linewidth: 2, depthWrite: false });
 
 // Shared materials that must never be disposed when tearing down a group
 // (they are referenced by many meshes / lines simultaneously).
@@ -140,7 +146,7 @@ const ghostQueue = []; // order of ghost titles
 const MAX_GHOSTS = 5;
 const SEGMENT_DIST = 40; // fixed spacing between centers
 
-const trailMaterial = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.35 });
+const trailMaterial = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.35, depthWrite: false });
 const trailGeometry = new THREE.BufferGeometry();
 const trailLine = new THREE.Line(trailGeometry, trailMaterial);
 scene.add(trailLine);
@@ -350,7 +356,8 @@ function drawRay(centerTitle, targetTitle, startVec3, endVec3, rank, total, grou
     color: baseColor,
     transparent: true,
     opacity: Math.min(1, lineOpacity + 0.15),
-    blending: THREE.AdditiveBlending
+    blending: THREE.AdditiveBlending,
+    depthWrite: false
   });
   const line = new THREE.Line(geo, mat);
   const mid = startVec3.clone().add(endVec3).multiplyScalar(0.5);
@@ -363,7 +370,8 @@ function drawRay(centerTitle, targetTitle, startVec3, endVec3, rank, total, grou
     color: baseColor,
     transparent: true,
     blending: THREE.AdditiveBlending,
-    opacity: 0.95
+    opacity: 0.95,
+    depthWrite: false
   });
   const dot = new THREE.Sprite(dotMat);
   dot.scale.set(0.7, 0.7, 1);
