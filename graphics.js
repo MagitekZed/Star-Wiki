@@ -1,5 +1,9 @@
-import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
-import { OrbitControls } from 'https://unpkg.com/three@0.160.0/examples/jsm/controls/OrbitControls.js?module';
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { getPageStar, fetchSummary, summaryCache, starCache } from "./wikipedia.js";
 
 // ====== Scene setup ======
@@ -7,6 +11,7 @@ const container = document.getElementById('canvas');
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(container.clientWidth, container.clientHeight);
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.outputColorSpace = THREE.SRGBColorSpace;
 container.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
@@ -20,15 +25,22 @@ const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.target.set(0, 0, 0);
 
-const ambient = new THREE.AmbientLight(0xffffff, 0.7);
-scene.add(ambient);
-const dir = new THREE.DirectionalLight(0xffffff, 0.9);
-dir.position.set(10, 30, 20);
-scene.add(dir);
-
 // Background starfield for depth
 const bgStars = createBackgroundStars();
 scene.add(bgStars);
+
+// ====== Post-processing (bloom) ======
+const composer = new EffectComposer(renderer);
+composer.setPixelRatio(Math.min(devicePixelRatio, 2));
+composer.addPass(new RenderPass(scene, camera));
+const bloomPass = new UnrealBloomPass(
+  new THREE.Vector2(container.clientWidth, container.clientHeight),
+  0.9,  // strength
+  0.5,  // radius
+  0.1   // threshold — only the bright additive stars/rays bloom
+);
+composer.addPass(bloomPass);
+composer.addPass(new OutputPass());
 
 // Resize handling
 window.addEventListener('resize', () => {
@@ -37,6 +49,8 @@ window.addEventListener('resize', () => {
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
   renderer.setSize(w, h);
+  composer.setSize(w, h);
+  bloomPass.setSize(w, h);
 });
 
 // Tooltip
@@ -883,7 +897,6 @@ function onGo(val){
   if (backToggle) backToggle.checked = false;
   starCache.clear();
   summaryCache.clear();
-  try { localStorage.clear(); } catch {}
   visited.clear();
   history = [];
   historyIndex = -1;
@@ -1002,9 +1015,9 @@ function animate(){
     }
   });
   bgStars.rotation.y += 0.0003;
-  renderer.render(scene, camera);
+  composer.render();
 }
-function renderOnce(){ renderer.render(scene, camera); }
+function renderOnce(){ composer.render(); }
 
 function showToast(msg){
   const t = document.getElementById('toast');
@@ -1041,17 +1054,36 @@ function createBackgroundStars(){
 }
 
 function createStarTexture(){
-  const size = 64;
+  const size = 128;
   const canvas = document.createElement('canvas');
   canvas.width = size;
   canvas.height = size;
   const ctx = canvas.getContext('2d');
-  const gradient = ctx.createRadialGradient(size/2, size/2, 0, size/2, size/2, size/2);
-  gradient.addColorStop(0, 'rgba(255,255,255,1)');
-  gradient.addColorStop(0.2, 'rgba(255,255,255,0.8)');
-  gradient.addColorStop(1, 'rgba(255,255,255,0)');
-  ctx.fillStyle = gradient;
-  ctx.fillRect(0,0,size,size);
+  const c = size / 2;
+  // Hot tight core fading into a long, soft halo. Kept grayscale so the
+  // per-material SpriteMaterial.color tint stays accurate across star types.
+  const glow = ctx.createRadialGradient(c, c, 0, c, c, c);
+  glow.addColorStop(0.00, 'rgba(255,255,255,1)');
+  glow.addColorStop(0.07, 'rgba(255,255,255,0.92)');
+  glow.addColorStop(0.22, 'rgba(255,255,255,0.42)');
+  glow.addColorStop(0.50, 'rgba(255,255,255,0.12)');
+  glow.addColorStop(1.00, 'rgba(255,255,255,0)');
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, size, size);
+  // Faint additive diffraction spikes through the core for a "star" read.
+  ctx.globalCompositeOperation = 'lighter';
+  const spikeH = ctx.createLinearGradient(0, c, size, c);
+  spikeH.addColorStop(0.0, 'rgba(255,255,255,0)');
+  spikeH.addColorStop(0.5, 'rgba(255,255,255,0.5)');
+  spikeH.addColorStop(1.0, 'rgba(255,255,255,0)');
+  ctx.fillStyle = spikeH;
+  ctx.fillRect(0, c - 1, size, 2);
+  const spikeV = ctx.createLinearGradient(c, 0, c, size);
+  spikeV.addColorStop(0.0, 'rgba(255,255,255,0)');
+  spikeV.addColorStop(0.5, 'rgba(255,255,255,0.5)');
+  spikeV.addColorStop(1.0, 'rgba(255,255,255,0)');
+  ctx.fillStyle = spikeV;
+  ctx.fillRect(c - 1, 0, 2, size);
   return new THREE.CanvasTexture(canvas);
 }
 export {
