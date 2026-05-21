@@ -98,6 +98,14 @@ const materialVisited = new THREE.SpriteMaterial({
 const RETURN_COLOR = 0xf7768e;
 const materialRayHover = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 1, linewidth: 2 });
 
+// Shared materials that must never be disposed when tearing down a group
+// (they are referenced by many meshes / lines simultaneously).
+const SHARED_MATERIALS = new Set([
+  materialCenter, materialNeighbor, materialNeighborHover,
+  materialBackNeighbor, materialBackNeighborHover, materialVisited,
+  materialRayHover
+]);
+
 // ====== Trail Mode state ======
 const clusterGroups = new Map(); // title -> {star, edge}
 const centerPositions = new Map(); // title -> THREE.Vector3
@@ -155,8 +163,26 @@ function directionFromTitle(title){
   return [Math.cos(theta)*Math.sin(phi), Math.sin(theta)*Math.sin(phi), Math.cos(phi)];
 }
 
+function disposeObject(obj){
+  // Dispose per-object GPU resources. Geometries are always created fresh, so
+  // they are always safe to dispose. Materials are cloned per-mesh, but a few
+  // are shared singletons (SHARED_MATERIALS) and must be left intact. Textures
+  // are shared (e.g. starTexture) and are intentionally never disposed here.
+  if (obj.geometry && typeof obj.geometry.dispose === 'function') obj.geometry.dispose();
+  const mat = obj.material;
+  if (mat && !SHARED_MATERIALS.has(mat) && typeof mat.dispose === 'function') mat.dispose();
+}
+
+function disposeGroup(g){
+  g.traverse(disposeObject);
+}
+
 function clearGroup(g){
-  while (g.children.length) g.remove(g.children.pop());
+  while (g.children.length) {
+    const child = g.children.pop();
+    disposeObject(child);
+    g.remove(child);
+  }
 }
 
 function ghostify(title){
@@ -353,7 +379,11 @@ function rebuildStar(title, addToHistory=true){
     } else {
       history[historyIndex] = canonical;
     }
-    clusterGroups.forEach(g=>{ scene.remove(g.star); scene.remove(g.edge); });
+    clusterGroups.forEach(g=>{
+      if (g.star !== starGroup) disposeGroup(g.star);
+      if (g.edge !== edgeGroup) disposeGroup(g.edge);
+      scene.remove(g.star); scene.remove(g.edge);
+    });
     clearGroup(starGroup); clearGroup(edgeGroup);
     // Ensure the reusable groups are attached to the scene again
     scene.add(starGroup); scene.add(edgeGroup);
@@ -400,6 +430,8 @@ async function refreshCurrentNeighbors(){
     ? centerPositions.get(prevTitle).clone().sub(pos)
     : null;
 
+  disposeGroup(starGroup);
+  disposeGroup(edgeGroup);
   scene.remove(starGroup);
   scene.remove(edgeGroup);
   clusterGroups.delete(currentTitle);
@@ -471,7 +503,7 @@ async function travelToNeighbor(targetTitle, addToHistory=true){
     // Rule 1: stable position for previously seen centers
     to = centerPositions.get(canonical).clone();
     const old = clusterGroups.get(canonical);
-    if (old) { scene.remove(old.star); scene.remove(old.edge); clusterGroups.delete(canonical); }
+    if (old) { disposeGroup(old.star); disposeGroup(old.edge); scene.remove(old.star); scene.remove(old.edge); clusterGroups.delete(canonical); }
     const idx = ghostQueue.indexOf(canonical); if (idx !== -1) ghostQueue.splice(idx,1);
   } else {
     // Rule 2: new center placement along the incoming vector at fixed segment distance
@@ -536,11 +568,11 @@ async function travelToNeighbor(targetTitle, addToHistory=true){
         if (ghostQueue.length > MAX_GHOSTS) {
           const old = ghostQueue.shift();
           const grp = clusterGroups.get(old);
-          if (grp) { scene.remove(grp.star); scene.remove(grp.edge); clusterGroups.delete(old); centerPositions.delete(old); }
+          if (grp) { disposeGroup(grp.star); disposeGroup(grp.edge); scene.remove(grp.star); scene.remove(grp.edge); clusterGroups.delete(old); centerPositions.delete(old); }
         }
       } else {
         const grp = clusterGroups.get(currentTitle);
-        if (grp) { scene.remove(grp.star); scene.remove(grp.edge); clusterGroups.delete(currentTitle); centerPositions.delete(currentTitle); }
+        if (grp) { disposeGroup(grp.star); disposeGroup(grp.edge); scene.remove(grp.star); scene.remove(grp.edge); clusterGroups.delete(currentTitle); centerPositions.delete(currentTitle); }
       }
       starGroup = newStar;
       edgeGroup = newEdge;
@@ -771,10 +803,14 @@ function resetHovered(){
   if (!hovered) return;
   const obj = hovered.object;
   if (obj.userData.kind === 'neighbor') {
+    // The current material is the per-hover clone we created; dispose it so it
+    // doesn't accumulate on the GPU across many hover in/out cycles.
+    const prevMat = obj.material;
     const baseMat = visited.has(obj.userData.title)
       ? materialVisited
       : (showBacklinks ? materialBackNeighbor : materialNeighbor);
     obj.material = baseMat.clone();
+    if (prevMat && !SHARED_MATERIALS.has(prevMat) && typeof prevMat.dispose === 'function') prevMat.dispose();
     if(obj.userData.baseScale) obj.scale.set(obj.userData.baseScale, obj.userData.baseScale, 1);
   } else if (obj.userData.normalMat) {
     obj.material = obj.userData.normalMat;
@@ -786,6 +822,10 @@ function updateHover(){
   const intersects = raycaster.intersectObjects([...edgeGroup.children, ...starGroup.children], false);
   if (intersects.length > 0) {
     const first = intersects[0];
+    // Only mutate materials/scale when the hovered object actually changes;
+    // updateHover runs every frame, so swapping the material unconditionally
+    // would allocate a new material per frame and leak GPU memory.
+    const isNewHover = !hovered || hovered.object !== first.object;
     if (hovered && hovered.object !== first.object) {
       resetHovered();
     }
@@ -793,8 +833,10 @@ function updateHover(){
     const obj = first.object;
     tooltip.classList.add('show');
     if (obj.userData.kind === 'neighbor') {
-      obj.material = (showBacklinks ? materialBackNeighborHover : materialNeighborHover).clone();
-      if(obj.userData.baseScale) obj.scale.set(obj.userData.baseScale * 1.25, obj.userData.baseScale * 1.25, 1);
+      if (isNewHover) {
+        obj.material = (showBacklinks ? materialBackNeighborHover : materialNeighborHover).clone();
+        if(obj.userData.baseScale) obj.scale.set(obj.userData.baseScale * 1.25, obj.userData.baseScale * 1.25, 1);
+      }
       const worldPos = obj.getWorldPosition(new THREE.Vector3());
       const rect = renderer.domElement.getBoundingClientRect();
       const v = worldPos.project(camera);
@@ -804,7 +846,7 @@ function updateHover(){
       tooltip.style.top = y + 'px';
       tooltip.textContent = obj.userData.title;
     } else if (obj.userData.title && obj.userData.kind !== 'center') {
-      obj.material = materialRayHover;
+      if (isNewHover) obj.material = materialRayHover;
       const worldMid = obj.parent.localToWorld(obj.userData.mid.clone());
       const rect = renderer.domElement.getBoundingClientRect();
       const v = worldMid.project(camera);
@@ -851,7 +893,11 @@ function onGo(val){
   controls.update();
   hovered = null;
   tooltip.classList.remove('show');
-  clusterGroups.forEach(g=>{ scene.remove(g.star); scene.remove(g.edge); });
+  clusterGroups.forEach(g=>{
+    if (g.star !== starGroup) disposeGroup(g.star);
+    if (g.edge !== edgeGroup) disposeGroup(g.edge);
+    scene.remove(g.star); scene.remove(g.edge);
+  });
   rebuildStar(value);
 }
 
@@ -864,7 +910,7 @@ function setShowBacklinks(val){
 function setTrailMode(val){
   trailMode = val;
   if (!trailMode) {
-    clusterGroups.forEach((g,t)=>{ if (t !== currentTitle) { scene.remove(g.star); scene.remove(g.edge); clusterGroups.delete(t); centerPositions.delete(t); } });
+    clusterGroups.forEach((g,t)=>{ if (t !== currentTitle) { disposeGroup(g.star); disposeGroup(g.edge); scene.remove(g.star); scene.remove(g.edge); clusterGroups.delete(t); centerPositions.delete(t); } });
     ghostQueue.length = 0;
     updateTrail();
   }

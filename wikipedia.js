@@ -65,7 +65,7 @@ async function wikiFetch(url){
 async function fetchSummary(title){
   if (summaryCache.has(title)) return summaryCache.get(title);
   const info = { title, extract: '', thumbnail: null };
-  summaryCache.set(title, info);
+  let ok = false;
   try {
     const res = await wikiFetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`);
     if (res.ok) {
@@ -73,8 +73,11 @@ async function fetchSummary(title){
       if (data.title) info.title = data.title;
       if (data.extract) info.extract = data.extract;
       if (data.thumbnail?.source) info.thumbnail = data.thumbnail.source;
+      ok = true;
     }
   } catch {}
+  // Only cache successful responses so a transient failure isn't cached permanently.
+  if (ok) summaryCache.set(title, info);
   return info;
 }
 
