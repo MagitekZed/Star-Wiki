@@ -88,7 +88,7 @@ header h1.brand { display:flex; align-items:center; gap:8px; margin:0 6px 0 0; f
 .chip { font-size:11px; line-height:1; color:var(--text-dim); background:rgba(122,162,247,0.10); border:1px solid var(--hairline); padding:5px 9px; border-radius:999px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%; }
 
 main { position:relative; z-index:2; flex:1; min-height:0; display:flex; justify-content:flex-end; align-items:stretch; padding:14px; gap:14px; pointer-events:none; }
-#canvas { position:fixed; inset:0; width:100vw; height:100vh; z-index:0; background:#07080f; }
+#canvas { position:fixed; inset:0; width:100vw; height:100vh; z-index:0; background:#07080f; pointer-events:auto; }
 #info { pointer-events:auto; width:clamp(280px, 32%, 360px); max-height:100%; padding:14px; overflow-y:auto; overflow-x:hidden; max-width:100%;
   background:var(--panel-glass); -webkit-backdrop-filter:var(--blur); backdrop-filter:var(--blur);
   border:1px solid var(--hairline); border-radius:var(--radius-lg); box-shadow:var(--shadow-2); }
