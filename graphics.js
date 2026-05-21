@@ -34,6 +34,11 @@ scene.add(bgStars);
 // ====== Post-processing (bloom) ======
 const composer = new EffectComposer(renderer);
 composer.setPixelRatio(Math.min(devicePixelRatio, 2));
+// The renderer's own antialias only applies to the default framebuffer, not the
+// composer's offscreen targets — so route rendering through multisampled targets,
+// otherwise thin ray/trail lines shimmer and flicker through post-processing.
+composer.renderTarget1.samples = 4;
+composer.renderTarget2.samples = 4;
 composer.addPass(new RenderPass(scene, camera));
 const bloomPass = new UnrealBloomPass(
   new THREE.Vector2(container.clientWidth, container.clientHeight),
@@ -47,6 +52,8 @@ vignettePass.uniforms.offset.value = 1.05;
 vignettePass.uniforms.darkness.value = 1.25;
 composer.addPass(vignettePass);
 composer.addPass(new OutputPass());
+// Reallocate the render targets at the correct size now that MSAA is enabled.
+composer.setSize(container.clientWidth, container.clientHeight);
 
 // Resize handling
 window.addEventListener('resize', () => {
