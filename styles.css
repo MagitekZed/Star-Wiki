@@ -168,6 +168,8 @@ footer { position:relative; z-index:2; padding:7px 16px; border-top:1px solid va
   .preview-content { display:flex; gap:8px; }
   .preview-content img { width:60px; height:60px; object-fit:cover; border-radius:4px; background:#23283b; flex-shrink:0; }
   .preview-content p { margin:0; font-size:13px; color:var(--muted); overflow-wrap:anywhere; word-break:break-word; }
-  .attrib { font-size:11px; color:var(--muted); margin-top:6px; }
+  .preview-cta { margin-top:10px; padding:7px 10px; border-radius:8px; font-size:12px; font-weight:600; letter-spacing:0.01em; color:var(--accent-2); background:rgba(94,224,255,0.10); border:1px solid var(--hairline); text-align:center; transition:background var(--dur), border-color var(--dur); }
+  .preview-body:hover .preview-cta { background:rgba(94,224,255,0.18); border-color:var(--accent); }
+  .attrib { font-size:11px; color:var(--muted); margin-top:8px; }
   .preview-link { display:block; margin-top:8px; font-size:13px; color:var(--accent); text-decoration:none; }
   .preview-link:hover { text-decoration:underline; }
