@@ -233,23 +233,24 @@ footer { position:relative; z-index:2; padding:7px 16px; border-top:1px solid va
 .sheet-handle:hover { opacity:0.8; }
 
 @media (max-width: 720px) {
-  header { flex-direction:column; align-items:stretch; padding:10px 12px; gap:8px; }
-  header h1.brand { font-size:18px; margin:0; }
+  header { flex-direction:column; align-items:stretch; padding:8px 12px; gap:7px; }
+  header h1.brand { font-size:17px; margin:0; }
   .brand-tag { display:none; }
-  .controls { width:100%; min-width:0; gap:6px; }
-  .controls input[type="text"] { flex:1 1 100%; width:auto; }
-  .controls button { padding:8px 11px; font-size:13px; }
-  #breadcrumbs { padding:6px 12px; }
+  .controls { width:100%; min-width:0; gap:5px; }
+  .controls input[type="text"] { flex:1 1 100%; width:auto; padding:8px 10px; }
+  .controls button { padding:6px 9px; font-size:12px; }
+  .toggle { font-size:11px; }
+  #breadcrumbs { padding:5px 12px; }
 
   main { padding:0; }
   #info {
     position:fixed; left:0; right:0; bottom:0; top:auto; z-index:20;
-    width:auto; max-width:none; max-height:62vh;
-    padding:8px 14px 18px;
+    width:auto; max-width:none; max-height:48vh;
+    padding:6px 14px 16px;
     border-radius:var(--radius-lg) var(--radius-lg) 0 0;
     transition:max-height var(--dur) var(--ease-out);
   }
-  #info.collapsed { max-height:42px; overflow:hidden; }
-  .sheet-handle { display:block; }
+  #info.collapsed { max-height:40px; overflow:hidden; }
+  .sheet-handle { display:block; margin:0 auto 8px; }
   footer { display:none; }
 }

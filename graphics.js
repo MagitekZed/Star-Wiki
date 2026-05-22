@@ -1169,8 +1169,12 @@ function updateHover(){
 }
 
 
-// Shift the projection left so the look-at point (the center star) lands in the
-// middle of the canvas area NOT covered by the always-open right sidebar.
+// Center the look-at point (the center star) in the canvas area that's actually
+// visible — beside the sidebar on desktop, or in the band between the header and
+// the bottom sheet on mobile. Computes a TARGET; applyViewOffset eases to it.
+const _viewOffset = { x: 0, y: 0 };                 // currently applied (eased)
+const _viewOffsetTarget = { x: 0, y: 0, on: false };// desired
+
 function updateViewOffset(){
   const w = container.clientWidth, h = container.clientHeight;
   if (!w || !h) return;
@@ -1178,15 +1182,43 @@ function updateViewOffset(){
   const r = info ? info.getBoundingClientRect() : null;
   const mobile = window.innerWidth <= 720;
   if (mobile && r && r.height > 0) {
-    // Bottom sheet: shift the scene UP so the star centers above the sheet.
-    const obscured = Math.max(0, h - r.top);
-    if (obscured > 1) { camera.setViewOffset(w, h, 0, obscured / 2, w, h); return; }
-  } else if (!mobile && r && r.width > 0) {
-    // Side panel: shift the scene LEFT so the star centers beside the sidebar.
-    const obscured = Math.max(0, w - r.left);
-    if (obscured > 1) { camera.setViewOffset(w, h, obscured / 2, 0, w, h); return; }
+    // Bottom sheet: center vertically in the visible band (below the header/
+    // breadcrumbs, above the sheet) so the star isn't hidden behind either.
+    const bc = document.getElementById('breadcrumbs');
+    const topInset = bc ? bc.getBoundingClientRect().bottom : 0;
+    const centerY = (topInset + r.top) / 2;
+    _viewOffsetTarget.x = 0;
+    _viewOffsetTarget.y = h / 2 - centerY;          // +up / -down
+    _viewOffsetTarget.on = true;
+  } else if (!mobile && r && r.width > 0 && (w - r.left) > 1) {
+    // Side panel: center horizontally in the area left of the sidebar.
+    _viewOffsetTarget.x = (w - r.left) / 2;
+    _viewOffsetTarget.y = 0;
+    _viewOffsetTarget.on = true;
+  } else {
+    _viewOffsetTarget.x = 0; _viewOffsetTarget.y = 0; _viewOffsetTarget.on = false;
   }
-  camera.clearViewOffset();
+}
+
+function viewOffsetSettling(){
+  return Math.abs(_viewOffset.x - (_viewOffsetTarget.on ? _viewOffsetTarget.x : 0)) > 0.5
+      || Math.abs(_viewOffset.y - (_viewOffsetTarget.on ? _viewOffsetTarget.y : 0)) > 0.5;
+}
+
+function applyViewOffset(){
+  const w = container.clientWidth, h = container.clientHeight;
+  if (!w || !h) return;
+  const tx = _viewOffsetTarget.on ? _viewOffsetTarget.x : 0;
+  const ty = _viewOffsetTarget.on ? _viewOffsetTarget.y : 0;
+  const k = REDUCED ? 1 : 0.18;                      // ease (instant under reduced-motion)
+  _viewOffset.x += (tx - _viewOffset.x) * k;
+  _viewOffset.y += (ty - _viewOffset.y) * k;
+  if (Math.abs(_viewOffset.x) > 0.5 || Math.abs(_viewOffset.y) > 0.5) {
+    camera.setViewOffset(w, h, _viewOffset.x, _viewOffset.y, w, h);
+  } else if (camera.view && camera.view.enabled) {
+    camera.clearViewOffset();
+    _viewOffset.x = 0; _viewOffset.y = 0;
+  }
 }
 
 function centerCameraOnCurrent(){
@@ -1315,6 +1347,7 @@ function animate(){
   // Drift the camera slowly when idle (not mid-travel, no preview open, motion allowed).
   controls.autoRotate = !REDUCED && !isAnimating && !previewTarget && (performance.now() - lastInteraction > IDLE_MS);
   controls.update();
+  applyViewOffset();
   updateHover();
 
   // scale-in blooms
@@ -1385,7 +1418,7 @@ function animate(){
   const tMs = performance.now();
   // "Active" = travel/blooms/hover or just-interacted; idle drift is slow enough
   // to run at the throttled idle rate, so it's intentionally not counted here.
-  const active = isAnimating || _blooms.length > 0 || hovered || (tMs - lastInteraction < 1000);
+  const active = isAnimating || _blooms.length > 0 || hovered || viewOffsetSettling() || (tMs - lastInteraction < 1000);
   if (active || tMs - lastRenderTime >= IDLE_FRAME_MS) {
     composer.render();
     lastRenderTime = tMs;
