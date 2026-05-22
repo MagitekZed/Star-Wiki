@@ -46,12 +46,12 @@
         <div class="search-wrap">
           <input id="search" type="text" placeholder="Search a page…" list="wordlist" />
           <datalist id="wordlist"></datalist>
-          <button id="goBtn" class="search-go" title="Search" aria-label="Search"><svg class="icon"><use href="#ic-search"/></svg></button>
+          <button id="goBtn" class="search-go" data-tip="Search" aria-label="Search"><svg class="icon"><use href="#ic-search"/></svg></button>
         </div>
-        <button id="randomBtn" class="icon-btn" title="Surprise me — random article" aria-label="Surprise me"><svg class="icon"><use href="#ic-surprise"/></svg></button>
-        <button id="pathBtn" class="icon-btn" title="Find a path between two articles" aria-label="Find path"><svg class="icon"><use href="#ic-route"/></svg></button>
+        <button id="randomBtn" class="icon-btn" data-tip="Surprise me" aria-label="Surprise me — random article"><svg class="icon"><use href="#ic-surprise"/></svg></button>
+        <button id="pathBtn" class="icon-btn" data-tip="Find path" aria-label="Find a path between two articles"><svg class="icon"><use href="#ic-route"/></svg></button>
         <div class="menu">
-          <button id="viewBtn" class="icon-btn" title="View options" aria-label="View options"><svg class="icon"><use href="#ic-settings"/></svg></button>
+          <button id="viewBtn" class="icon-btn" data-tip="View options" aria-label="View options"><svg class="icon"><use href="#ic-settings"/></svg></button>
           <div id="viewPanel" class="menu-panel hidden">
             <div class="menu-label">View</div>
             <label class="toggle"><input type="checkbox" id="backToggle" /> Backlinks
@@ -60,9 +60,9 @@
             <label class="toggle"><input type="checkbox" id="trailToggle" checked /> Trail</label>
           </div>
         </div>
-        <button id="resetCam" class="icon-btn" title="Reset camera" aria-label="Reset camera"><svg class="icon"><use href="#ic-home"/></svg></button>
+        <button id="resetCam" class="icon-btn" data-tip="Reset camera" aria-label="Reset camera"><svg class="icon"><use href="#ic-home"/></svg></button>
         <div class="menu">
-          <button id="moreBtn" class="icon-btn" title="More" aria-label="More actions"><svg class="icon"><use href="#ic-more"/></svg></button>
+          <button id="moreBtn" class="icon-btn" data-tip="More" aria-label="More actions"><svg class="icon"><use href="#ic-more"/></svg></button>
           <div id="morePanel" class="menu-panel hidden">
             <button id="copyLinkBtn" class="menu-item" title="Copy a shareable link to this journey"><svg class="icon"><use href="#ic-link"/></svg> Copy link</button>
             <button id="snapshotBtn" class="menu-item" title="Download a PNG of the current view"><svg class="icon"><use href="#ic-camera"/></svg> Snapshot</button>
@@ -72,7 +72,7 @@
             <div id="bookmarksList"></div>
           </div>
         </div>
-        <button id="helpBtn" class="icon-btn" title="Help" aria-label="Help"><svg class="icon"><use href="#ic-help"/></svg></button>
+        <button id="helpBtn" class="icon-btn" data-tip="Help" aria-label="Help"><svg class="icon"><use href="#ic-help"/></svg></button>
       </div>
     </header>
 
