@@ -61,10 +61,10 @@ if (randomBtn) randomBtn.addEventListener('click', async ()=>{
 });
 
 const copyLinkBtn = document.getElementById('copyLinkBtn');
-if (copyLinkBtn) copyLinkBtn.addEventListener('click', ()=> copyShareLink());
+if (copyLinkBtn) copyLinkBtn.addEventListener('click', ()=>{ copyShareLink(); document.getElementById('morePanel')?.classList.add('hidden'); });
 
 const snapshotBtn = document.getElementById('snapshotBtn');
-if (snapshotBtn) snapshotBtn.addEventListener('click', ()=> saveSnapshot());
+if (snapshotBtn) snapshotBtn.addEventListener('click', ()=>{ saveSnapshot(); document.getElementById('morePanel')?.classList.add('hidden'); });
 
 // Mobile bottom-sheet collapse toggle (recompute camera view offset once settled)
 const sheetHandle = document.getElementById('sheetHandle');
@@ -167,24 +167,27 @@ document.querySelectorAll('#welcome .starter-chip').forEach(chip => {
   chip.addEventListener('click', ()=> onGo(chip.textContent));
 });
 
-// ===== Bookmarks (saved journeys) =====
+// ===== Header menus (View + More) and saved journeys =====
 const BM_KEY = 'starwiki.bookmarks';
-const bookmarksPanel = document.getElementById('bookmarksPanel');
-const bookmarksBtn = document.getElementById('bookmarksBtn');
+const bookmarksList = document.getElementById('bookmarksList');
 const saveBtn = document.getElementById('saveBtn');
+const viewBtn = document.getElementById('viewBtn');
+const viewPanel = document.getElementById('viewPanel');
+const moreBtn = document.getElementById('moreBtn');
+const morePanel = document.getElementById('morePanel');
 
 function getBookmarks(){ try { return JSON.parse(localStorage.getItem(BM_KEY) || '[]'); } catch { return []; } }
 function setBookmarks(list){ try { localStorage.setItem(BM_KEY, JSON.stringify(list)); } catch {} }
 
 function renderBookmarks(){
-  if (!bookmarksPanel) return;
+  if (!bookmarksList) return;
   const list = getBookmarks();
-  bookmarksPanel.innerHTML = '';
+  bookmarksList.innerHTML = '';
   if (!list.length) {
     const empty = document.createElement('div');
     empty.className = 'menu-empty';
     empty.textContent = 'No saved journeys yet.';
-    bookmarksPanel.appendChild(empty);
+    bookmarksList.appendChild(empty);
     return;
   }
   list.forEach((bm) => {
@@ -204,7 +207,7 @@ function renderBookmarks(){
     load.appendChild(sub);
     load.addEventListener('click', ()=>{
       loadPath(bm.path);
-      bookmarksPanel.classList.add('hidden');
+      if (morePanel) morePanel.classList.add('hidden');
     });
 
     const del = document.createElement('button');
@@ -221,7 +224,7 @@ function renderBookmarks(){
 
     row.appendChild(load);
     row.appendChild(del);
-    bookmarksPanel.appendChild(row);
+    bookmarksList.appendChild(row);
   });
 }
 
@@ -237,16 +240,21 @@ if (saveBtn) saveBtn.addEventListener('click', ()=>{
   renderBookmarks();
 });
 
-if (bookmarksBtn) bookmarksBtn.addEventListener('click', (e)=>{
-  e.stopPropagation();
-  renderBookmarks();
-  bookmarksPanel.classList.toggle('hidden');
-});
+function closeMenus(except){
+  [viewPanel, morePanel].forEach(p => { if (p && p !== except) p.classList.add('hidden'); });
+}
+function toggleMenu(panel){
+  if (!panel) return;
+  const willOpen = panel.classList.contains('hidden');
+  closeMenus(panel);
+  panel.classList.toggle('hidden', !willOpen);
+}
+if (viewBtn) viewBtn.addEventListener('click', (e)=>{ e.stopPropagation(); toggleMenu(viewPanel); });
+if (moreBtn) moreBtn.addEventListener('click', (e)=>{ e.stopPropagation(); renderBookmarks(); toggleMenu(morePanel); });
 
 document.addEventListener('click', (e)=>{
-  if (!bookmarksPanel || bookmarksPanel.classList.contains('hidden')) return;
-  if (e.target.closest('.menu')) return;
-  bookmarksPanel.classList.add('hidden');
+  if (e.target.closest('.menu')) return; // clicks inside a menu keep it open
+  closeMenus();
 });
 
 document.getElementById('resetCam').addEventListener('click', centerCameraOnCurrent);

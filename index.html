@@ -25,10 +25,17 @@
       <symbol id="ic-external" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6"/><path d="M20 4 11 13"/><path d="M18 13.5V19a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5.5"/></symbol>
       <symbol id="ic-help" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.6 9.4a2.5 2.5 0 1 1 3.6 2.3c-.8.4-1.2.9-1.2 1.8"/><path d="M12 17h.01"/></symbol>
       <symbol id="ic-star" viewBox="0 0 24 24" fill="currentColor"><path d="M12 3.5l2.6 6.1 6.6.5-5 4.3 1.5 6.4L12 17l-5.7 3.3L7.8 14.4l-5-4.3 6.6-.5z"/></symbol>
+      <symbol id="ic-search" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.6-3.6"/></symbol>
+      <symbol id="ic-surprise" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2.5l1.9 4.9 4.9 1.9-4.9 1.9L12 16l-1.9-4.8L5.2 9.3l4.9-1.9z"/><path d="M18.5 14l.9 2.3 2.3.9-2.3.9-.9 2.3-.9-2.3-2.3-.9 2.3-.9z"/></symbol>
+      <symbol id="ic-route" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="2.6"/><circle cx="18" cy="5" r="2.6"/><path d="M9 19h6.5a3.5 3.5 0 0 0 0-7h-7a3.5 3.5 0 0 1 0-7H15"/></symbol>
+      <symbol id="ic-settings" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h9"/><path d="M19 6h1"/><circle cx="16" cy="6" r="2.2"/><path d="M4 12h2"/><path d="M11 12h9"/><circle cx="8" cy="12" r="2.2"/><path d="M4 18h9"/><path d="M19 18h1"/><circle cx="16" cy="18" r="2.2"/></symbol>
+      <symbol id="ic-more" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="19" r="1.6"/></symbol>
+      <symbol id="ic-link" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 14.5 14.5 9.5"/><path d="M11 6.8 12.8 5a3.4 3.4 0 0 1 4.8 4.8l-1.8 1.8"/><path d="M13 17.2 11.2 19a3.4 3.4 0 0 1-4.8-4.8l1.8-1.8"/></symbol>
+      <symbol id="ic-camera" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h2.5L8 6h8l1.5 2H20a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.3"/></symbol>
+      <symbol id="ic-save" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v11"/><path d="m7.5 10 4.5 4.5L16.5 10"/><path d="M5 20h14"/></symbol>
     </svg>
     <div id="canvas"></div>
     <div id="loading" class="overlay"><span id="loadingText">Loading…</span></div>
-    <button id="helpBtn" class="help-btn" title="Help" aria-label="Help"><svg class="icon"><use href="#ic-help"/></svg></button>
     <header>
       <h1 class="brand">
         <svg class="brand-mark" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M12 1.8l2.7 6.9 7.4.5-5.7 4.8 1.9 7.2L12 17.9 5.7 21.2l1.9-7.2L1.9 9.2l7.4-.5z"/></svg>
@@ -36,23 +43,36 @@
         <span class="brand-tag">Wikipedia Rabbit Hole Explorer</span>
       </h1>
       <div class="controls">
-        <input id="search" type="text" placeholder="Type a page title (e.g., Earth)" list="wordlist" />
-        <datalist id="wordlist"></datalist>
-        <button id="goBtn">Search</button>
-        <button id="randomBtn" title="Open a random article">Surprise me</button>
-        <label class="toggle"><input type="checkbox" id="backToggle" /> Backlinks
-          <span class="info-icon"><svg class="icon"><use href="#ic-info"/></svg><span class="info-text">Show pages that link back to the current page.</span></span>
-        </label>
-        <label class="toggle"><input type="checkbox" id="trailToggle" checked /> Trail</label>
-        <button id="pathBtn" class="btn-2" title="Find a path between two articles">Find path</button>
-        <button id="copyLinkBtn" class="btn-2" title="Copy a shareable link to this journey">Copy link</button>
-        <button id="snapshotBtn" class="btn-2" title="Download a PNG of the current view">Snapshot</button>
-        <button id="saveBtn" class="btn-2" title="Save this journey">Save</button>
-        <div class="menu">
-          <button id="bookmarksBtn" class="btn-2" title="Saved journeys">Bookmarks ▾</button>
-          <div id="bookmarksPanel" class="menu-panel hidden"></div>
+        <div class="search-wrap">
+          <input id="search" type="text" placeholder="Search a page…" list="wordlist" />
+          <datalist id="wordlist"></datalist>
+          <button id="goBtn" class="search-go" title="Search" aria-label="Search"><svg class="icon"><use href="#ic-search"/></svg></button>
         </div>
-        <button id="resetCam" title="Reset camera"><svg class="icon"><use href="#ic-home"/></svg> Reset Camera</button>
+        <button id="randomBtn" class="icon-btn" title="Surprise me — random article" aria-label="Surprise me"><svg class="icon"><use href="#ic-surprise"/></svg></button>
+        <button id="pathBtn" class="icon-btn" title="Find a path between two articles" aria-label="Find path"><svg class="icon"><use href="#ic-route"/></svg></button>
+        <div class="menu">
+          <button id="viewBtn" class="icon-btn" title="View options" aria-label="View options"><svg class="icon"><use href="#ic-settings"/></svg></button>
+          <div id="viewPanel" class="menu-panel hidden">
+            <div class="menu-label">View</div>
+            <label class="toggle"><input type="checkbox" id="backToggle" /> Backlinks
+              <span class="info-icon"><svg class="icon"><use href="#ic-info"/></svg><span class="info-text">Show pages that link back to the current page.</span></span>
+            </label>
+            <label class="toggle"><input type="checkbox" id="trailToggle" checked /> Trail</label>
+          </div>
+        </div>
+        <button id="resetCam" class="icon-btn" title="Reset camera" aria-label="Reset camera"><svg class="icon"><use href="#ic-home"/></svg></button>
+        <div class="menu">
+          <button id="moreBtn" class="icon-btn" title="More" aria-label="More actions"><svg class="icon"><use href="#ic-more"/></svg></button>
+          <div id="morePanel" class="menu-panel hidden">
+            <button id="copyLinkBtn" class="menu-item" title="Copy a shareable link to this journey"><svg class="icon"><use href="#ic-link"/></svg> Copy link</button>
+            <button id="snapshotBtn" class="menu-item" title="Download a PNG of the current view"><svg class="icon"><use href="#ic-camera"/></svg> Snapshot</button>
+            <button id="saveBtn" class="menu-item" title="Save this journey"><svg class="icon"><use href="#ic-save"/></svg> Save journey</button>
+            <div class="menu-sep"></div>
+            <div class="menu-label">Saved journeys</div>
+            <div id="bookmarksList"></div>
+          </div>
+        </div>
+        <button id="helpBtn" class="icon-btn" title="Help" aria-label="Help"><svg class="icon"><use href="#ic-help"/></svg></button>
       </div>
     </header>
 
