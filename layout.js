@@ -1,4 +1,4 @@
-import { wikiFetch, getRandomTitle, findPath } from './wikipedia.js';
+import { wikiFetch, getRandomTitle, findPath, fetchDailyFeed } from './wikipedia.js';
 import {
   onGo,
   setShowBacklinks,
@@ -66,6 +66,14 @@ if (copyLinkBtn) copyLinkBtn.addEventListener('click', ()=> copyShareLink());
 const snapshotBtn = document.getElementById('snapshotBtn');
 if (snapshotBtn) snapshotBtn.addEventListener('click', ()=> saveSnapshot());
 
+// Mobile bottom-sheet collapse toggle (recompute camera view offset once settled)
+const sheetHandle = document.getElementById('sheetHandle');
+const infoEl = document.getElementById('info');
+if (sheetHandle && infoEl) {
+  sheetHandle.addEventListener('click', ()=> infoEl.classList.toggle('collapsed'));
+  infoEl.addEventListener('transitionend', (e)=>{ if (e.propertyName === 'max-height') window.dispatchEvent(new Event('resize')); });
+}
+
 // ===== Path finder ("six degrees") =====
 const pathOverlay = document.getElementById('pathOverlay');
 const pathBtn = document.getElementById('pathBtn');
@@ -123,6 +131,36 @@ if (pathOverlay) pathOverlay.addEventListener('click', e=>{ if (e.target === pat
 if (pathFind) pathFind.addEventListener('click', runPathFind);
 if (pathTo) pathTo.addEventListener('keydown', e=>{ if (e.key === 'Enter') runPathFind(); });
 if (pathFrom) pathFrom.addEventListener('keydown', e=>{ if (e.key === 'Enter') pathTo.focus(); });
+
+// Daily launchpad (featured + on this day) in the first-run welcome
+(async function loadDailyFeed(){
+  const box = document.getElementById('welcome-daily');
+  if (!box) return;
+  let feed;
+  try { feed = await fetchDailyFeed(); } catch { return; }
+  const addSection = (label, titles)=>{
+    if (!titles || !titles.length) return;
+    const sec = document.createElement('div');
+    const lbl = document.createElement('div');
+    lbl.className = 'welcome-daily-label';
+    lbl.textContent = label;
+    sec.appendChild(lbl);
+    const chips = document.createElement('div');
+    chips.className = 'welcome-chips';
+    titles.forEach(t => {
+      const b = document.createElement('button');
+      b.className = 'starter-chip';
+      b.textContent = t;
+      b.title = t;
+      b.addEventListener('click', ()=> onGo(t));
+      chips.appendChild(b);
+    });
+    sec.appendChild(chips);
+    box.appendChild(sec);
+  };
+  addSection('Featured today', feed.featured ? [feed.featured] : []);
+  addSection('On this day', feed.onThisDay);
+})();
 
 // First-run starter chips
 document.querySelectorAll('#welcome .starter-chip').forEach(chip => {

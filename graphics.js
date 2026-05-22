@@ -398,7 +398,8 @@ function drawRay(centerTitle, targetTitle, startVec3, endVec3, rank, total, grou
   line.userData = { center: centerTitle, title: targetTitle, kind: 'ray', normalMat: mat, mid, baseLinewidth, baseLineOpacity, baseColorHex: baseColor };
   group.add(line);
 
-  // Flow "comet" dot along the ray
+  // Flow "comet" dot along the ray (skipped entirely under reduced-motion).
+  if (REDUCED) return;
   const dotMat = new THREE.SpriteMaterial({
     map: starTexture,
     color: baseColor,
@@ -642,7 +643,7 @@ async function travelToNeighbor(targetTitle, addToHistory=true){
   const startCam = camera.position.clone();
   const startTarget = controls.target.clone();
   const startOffset = startCam.clone().sub(startTarget);
-  const duration = 1400;
+  const duration = REDUCED ? 350 : 1400;
   const fadeStart = 0.3;
   const t0 = performance.now();
   function tick(now){
@@ -1101,6 +1102,21 @@ function resetHovered(){
   }
 }
 
+// Warm a hovered page's data after a short dwell so travelling there feels
+// instant. Deduped per title+mode; getPageStar is cached so repeats are free.
+const _prefetched = new Set();
+let _prefetchTimer = null;
+function schedulePrefetch(title){
+  if (!title) return;
+  const key = (showBacklinks ? 'b:' : 'o:') + title;
+  if (_prefetched.has(key)) return;
+  clearTimeout(_prefetchTimer);
+  _prefetchTimer = setTimeout(()=>{
+    _prefetched.add(key);
+    getPageStar(title, showBacklinks).catch(()=>{});
+  }, 180);
+}
+
 function updateHover(){
   raycaster.setFromCamera(mouse, camera);
   const intersects = raycaster.intersectObjects([...edgeGroup.children, ...starGroup.children], false);
@@ -1116,6 +1132,9 @@ function updateHover(){
     hovered = first;
     const obj = first.object;
     tooltip.classList.add('show');
+    if (isNewHover && obj.userData.title && obj.userData.kind !== 'center') {
+      schedulePrefetch(obj.userData.title);
+    }
     if (obj.userData.kind === 'neighbor') {
       if (isNewHover) {
         obj.material = (showBacklinks ? materialBackNeighborHover : materialNeighborHover).clone();
@@ -1145,6 +1164,7 @@ function updateHover(){
     if (hovered) resetHovered();
     hovered = null;
     tooltip.classList.remove('show');
+    clearTimeout(_prefetchTimer);
   }
 }
 
@@ -1155,13 +1175,18 @@ function updateViewOffset(){
   const w = container.clientWidth, h = container.clientHeight;
   if (!w || !h) return;
   const info = document.getElementById('info');
-  let obscured = 0;
-  if (info) {
-    const r = info.getBoundingClientRect();
-    if (r.width > 0) obscured = Math.max(0, w - r.left); // sidebar + its right margin
+  const r = info ? info.getBoundingClientRect() : null;
+  const mobile = window.innerWidth <= 720;
+  if (mobile && r && r.height > 0) {
+    // Bottom sheet: shift the scene UP so the star centers above the sheet.
+    const obscured = Math.max(0, h - r.top);
+    if (obscured > 1) { camera.setViewOffset(w, h, 0, obscured / 2, w, h); return; }
+  } else if (!mobile && r && r.width > 0) {
+    // Side panel: shift the scene LEFT so the star centers beside the sidebar.
+    const obscured = Math.max(0, w - r.left);
+    if (obscured > 1) { camera.setViewOffset(w, h, obscured / 2, 0, w, h); return; }
   }
-  if (obscured > 1) camera.setViewOffset(w, h, obscured / 2, 0, w, h);
-  else camera.clearViewOffset();
+  camera.clearViewOffset();
 }
 
 function centerCameraOnCurrent(){
@@ -1305,54 +1330,70 @@ function animate(){
     if (p >= 1) _blooms.splice(i, 1);
   }
 
-  // move “comet” dots along rays, pulse return edges
-  const now = performance.now() / 1000;
-  edgeGroup.children.forEach(obj => {
-    if (obj.userData && obj.userData.kind === 'rayDot') {
-      const d = obj.userData;
-      const total = d.end.clone().sub(d.start);
-      const len = total.length();
-      if (len < 0.0001) return;
-      const dir = total.clone().normalize();
-      const t = (d.phase + now * d.speed) % 1;
-      const pos = d.start.clone().add(dir.multiplyScalar(len * t));
-      obj.position.copy(pos);
-      const s = 0.6 + 0.25 * Math.sin((now + d.phase) * 6.0);
-      obj.scale.set(s, s, 1);
-    } else if (obj.userData && obj.userData.kind === 'ray' && obj.userData.baseColorHex === RETURN_COLOR && obj.userData.normalMat) {
-      obj.userData.normalMat.opacity = 0.65 + 0.35 * Math.sin(now * 2.5);
-    }
-  });
+  // Ambient motion (comet dots, twinkle, hero breathing, parallax drift) — all
+  // skipped under reduced-motion for a calm, static scene.
+  if (!REDUCED) {
+    const now = performance.now() / 1000;
+    edgeGroup.children.forEach(obj => {
+      if (obj.userData && obj.userData.kind === 'rayDot') {
+        const d = obj.userData;
+        const total = d.end.clone().sub(d.start);
+        const len = total.length();
+        if (len < 0.0001) return;
+        const dir = total.clone().normalize();
+        const t = (d.phase + now * d.speed) % 1;
+        const pos = d.start.clone().add(dir.multiplyScalar(len * t));
+        obj.position.copy(pos);
+        const s = 0.6 + 0.25 * Math.sin((now + d.phase) * 6.0);
+        obj.scale.set(s, s, 1);
+      } else if (obj.userData && obj.userData.kind === 'ray' && obj.userData.baseColorHex === RETURN_COLOR && obj.userData.normalMat) {
+        obj.userData.normalMat.opacity = 0.65 + 0.35 * Math.sin(now * 2.5);
+      }
+    });
 
-  starGroup.children.forEach((obj) => {
-    const ud = obj.userData;
-    if (!ud) return;
-    if (ud.kind === 'neighbor' && (!hovered || hovered.object !== obj)) {
-      const base = ud.baseScale || 1;
-      const f = ud.twFreq || 2;
-      const p = ud.twPhase || 0;
-      const a = ud.twAmp || 0.12;
-      const s = base * (1 + a * Math.sin(now * f + p));
-      obj.scale.set(s, s, 1);
-    } else if (ud.kind === 'center') {
-      const s = (ud.baseScale || 2) * (1 + 0.06 * Math.sin(now * 1.3));
-      obj.scale.set(s, s, 1);
-    } else if (ud.kind === 'centerHalo') {
-      const s = (ud.baseScale || 7) * (1 + 0.10 * Math.sin(now * 0.9));
-      obj.scale.set(s, s, 1);
-    } else if (ud.kind === 'centerCorona') {
-      obj.material.rotation += 0.0025;
-      const s = (ud.baseScale || 3.6) * (1 + 0.08 * Math.sin(now * 1.1 + 1));
-      obj.scale.set(s, s, 1);
-    }
-  });
-  // Parallax: rotate each background layer at its own rate for a sense of depth.
-  bgStars.children.forEach(layer => {
-    if (layer.userData && layer.userData.rotSpeed) layer.rotation.y += layer.userData.rotSpeed;
-  });
-  composer.render();
+    starGroup.children.forEach((obj) => {
+      const ud = obj.userData;
+      if (!ud) return;
+      if (ud.kind === 'neighbor' && (!hovered || hovered.object !== obj)) {
+        const base = ud.baseScale || 1;
+        const f = ud.twFreq || 2;
+        const p = ud.twPhase || 0;
+        const a = ud.twAmp || 0.12;
+        const s = base * (1 + a * Math.sin(now * f + p));
+        obj.scale.set(s, s, 1);
+      } else if (ud.kind === 'center') {
+        const s = (ud.baseScale || 2) * (1 + 0.06 * Math.sin(now * 1.3));
+        obj.scale.set(s, s, 1);
+      } else if (ud.kind === 'centerHalo') {
+        const s = (ud.baseScale || 7) * (1 + 0.10 * Math.sin(now * 0.9));
+        obj.scale.set(s, s, 1);
+      } else if (ud.kind === 'centerCorona') {
+        obj.material.rotation += 0.0025;
+        const s = (ud.baseScale || 3.6) * (1 + 0.08 * Math.sin(now * 1.1 + 1));
+        obj.scale.set(s, s, 1);
+      }
+    });
+    // Parallax: rotate each background layer at its own rate for a sense of depth.
+    bgStars.children.forEach(layer => {
+      if (layer.userData && layer.userData.rotSpeed) layer.rotation.y += layer.userData.rotSpeed;
+    });
+  }
+
+  // On-demand rendering: full rate while something meaningful is happening,
+  // otherwise cap to ~30fps to save battery/GPU on an idle open tab. (Ambient
+  // positions are still updated every frame above; only the GPU draw is gated.)
+  const tMs = performance.now();
+  // "Active" = travel/blooms/hover or just-interacted; idle drift is slow enough
+  // to run at the throttled idle rate, so it's intentionally not counted here.
+  const active = isAnimating || _blooms.length > 0 || hovered || (tMs - lastInteraction < 1000);
+  if (active || tMs - lastRenderTime >= IDLE_FRAME_MS) {
+    composer.render();
+    lastRenderTime = tMs;
+  }
 }
-function renderOnce(){ composer.render(); }
+let lastRenderTime = 0;
+const IDLE_FRAME_MS = 1000 / 30;
+function renderOnce(){ composer.render(); lastRenderTime = performance.now(); }
 
 function showToast(msg){
   const t = document.getElementById('toast');

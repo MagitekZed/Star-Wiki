@@ -358,6 +358,34 @@ async function findPath(fromTitle, toTitle, onProgress = ()=>{}){
   return { status: 'notfound', from, to };
 }
 
+// Daily "featured" + "on this day" articles for the first-run launchpad.
+async function fetchDailyFeed(){
+  try {
+    const d = new Date();
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    const url = `https://en.wikipedia.org/api/rest_v1/feed/featured/${yyyy}/${mm}/${dd}`;
+    const res = await wikiFetch(url);
+    if (!res.ok) return { featured: null, onThisDay: [] };
+    const data = await res.json();
+    const featured = data.tfa?.titles?.normalized || data.tfa?.title || null;
+    const seen = new Set();
+    const onThisDay = [];
+    if (Array.isArray(data.onthisday)) {
+      for (const ev of data.onthisday) {
+        const p = ev.pages && ev.pages[0];
+        const title = p?.titles?.normalized || p?.title;
+        if (title && title !== featured && !seen.has(title)) { seen.add(title); onThisDay.push(title); }
+        if (onThisDay.length >= 4) break;
+      }
+    }
+    return { featured, onThisDay };
+  } catch {
+    return { featured: null, onThisDay: [] };
+  }
+}
+
 async function getRandomTitle(){
   try {
     const url = `https://en.wikipedia.org/w/api.php?action=query&list=random&rnnamespace=0&rnlimit=1&format=json&origin=*`;
@@ -369,4 +397,4 @@ async function getRandomTitle(){
   }
 }
 
-export { wikiFetch, fetchSummary, getPageStar, getRandomTitle, fetchWikidataFacts, findPath, summaryCache, starCache, fetchPageMetaBatch };
+export { wikiFetch, fetchSummary, getPageStar, getRandomTitle, fetchWikidataFacts, findPath, fetchDailyFeed, summaryCache, starCache, fetchPageMetaBatch };
