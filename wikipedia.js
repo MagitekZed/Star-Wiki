@@ -301,6 +301,63 @@ async function fetchWikidataFacts(id){
   return facts;
 }
 
+// ===== Path finder ("six degrees") =====
+async function fetchOutgoingLinks(title, cap = 500){
+  const out = [];
+  const seen = new Set();
+  let cont = null;
+  do {
+    let url = `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(title)}&prop=links&plnamespace=0&pllimit=max&format=json&origin=*`;
+    if (cont) url += `&plcontinue=${encodeURIComponent(cont)}`;
+    const res = await wikiFetch(url);
+    const data = await res.json();
+    const page = data.query?.pages ? Object.values(data.query.pages)[0] : null;
+    if (page?.links) {
+      for (const l of page.links) {
+        if (!seen.has(l.title)) { seen.add(l.title); out.push(l.title); }
+      }
+    }
+    cont = data.continue?.plcontinue;
+  } while (cont && out.length < cap);
+  return out.slice(0, cap);
+}
+
+/**
+ * Find a directed link path from -> to, up to 2 hops (path length <= 3 nodes).
+ * Uses prop=links + pltitles to batch-check candidates, so a search is ~13
+ * throttled requests. onProgress(msg) reports status. Returns:
+ *   { status:'found', path:[...] } | { status:'notfound', from, to } | { status:'invalid' }
+ */
+async function findPath(fromTitle, toTitle, onProgress = ()=>{}){
+  const from = await normalizeTitle((fromTitle || '').trim());
+  const to = await normalizeTitle((toTitle || '').trim());
+  if (!from || !to) return { status: 'invalid' };
+  if (from === to) return { status: 'found', path: [from] };
+
+  onProgress(`Mapping links from “${from}”…`);
+  const L0 = await fetchOutgoingLinks(from, 500);
+  if (!L0.length) return { status: 'notfound', from, to };
+  if (L0.includes(to)) return { status: 'found', path: [from, to] };
+
+  onProgress(`Checking ${L0.length} first-hop links…`);
+  const chunks = chunkArray(L0, 50);
+  let checked = 0;
+  for (const ch of chunks) {
+    try {
+      const url = `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(ch.join('|'))}&prop=links&pltitles=${encodeURIComponent(to)}&pllimit=max&format=json&origin=*`;
+      const res = await wikiFetch(url);
+      const data = await res.json();
+      const pages = data.query?.pages ? Object.values(data.query.pages) : [];
+      for (const p of pages) {
+        if (p.links && p.links.length) return { status: 'found', path: [from, p.title, to] };
+      }
+    } catch {}
+    checked += ch.length;
+    onProgress(`Checked ${checked}/${L0.length} links…`);
+  }
+  return { status: 'notfound', from, to };
+}
+
 async function getRandomTitle(){
   try {
     const url = `https://en.wikipedia.org/w/api.php?action=query&list=random&rnnamespace=0&rnlimit=1&format=json&origin=*`;
@@ -312,4 +369,4 @@ async function getRandomTitle(){
   }
 }
 
-export { wikiFetch, fetchSummary, getPageStar, getRandomTitle, fetchWikidataFacts, summaryCache, starCache, fetchPageMetaBatch };
+export { wikiFetch, fetchSummary, getPageStar, getRandomTitle, fetchWikidataFacts, findPath, summaryCache, starCache, fetchPageMetaBatch };

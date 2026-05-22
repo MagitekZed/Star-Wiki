@@ -18,9 +18,17 @@
     </script>
   </head>
   <body>
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+      <symbol id="ic-home" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 10 9-7 9 7"/><path d="M5 9v11h14V9"/></symbol>
+      <symbol id="ic-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 11.5v4.5"/><path d="M12 8h.01"/></symbol>
+      <symbol id="ic-close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+      <symbol id="ic-external" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6"/><path d="M20 4 11 13"/><path d="M18 13.5V19a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5.5"/></symbol>
+      <symbol id="ic-help" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.6 9.4a2.5 2.5 0 1 1 3.6 2.3c-.8.4-1.2.9-1.2 1.8"/><path d="M12 17h.01"/></symbol>
+      <symbol id="ic-star" viewBox="0 0 24 24" fill="currentColor"><path d="M12 3.5l2.6 6.1 6.6.5-5 4.3 1.5 6.4L12 17l-5.7 3.3L7.8 14.4l-5-4.3 6.6-.5z"/></symbol>
+    </svg>
     <div id="canvas"></div>
     <div id="loading" class="overlay"><span id="loadingText">Loading…</span></div>
-    <button id="helpBtn" class="help-btn" title="Help">?</button>
+    <button id="helpBtn" class="help-btn" title="Help" aria-label="Help"><svg class="icon"><use href="#ic-help"/></svg></button>
     <header>
       <h1 class="brand">
         <svg class="brand-mark" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M12 1.8l2.7 6.9 7.4.5-5.7 4.8 1.9 7.2L12 17.9 5.7 21.2l1.9-7.2L1.9 9.2l7.4-.5z"/></svg>
@@ -33,9 +41,10 @@
         <button id="goBtn">Search</button>
         <button id="randomBtn" title="Open a random article">Surprise me</button>
         <label class="toggle"><input type="checkbox" id="backToggle" /> Backlinks
-          <span class="info-icon">ℹ️<span class="info-text">Show pages that link back to the current page.</span></span>
+          <span class="info-icon"><svg class="icon"><use href="#ic-info"/></svg><span class="info-text">Show pages that link back to the current page.</span></span>
         </label>
         <label class="toggle"><input type="checkbox" id="trailToggle" checked /> Trail</label>
+        <button id="pathBtn" class="btn-2" title="Find a path between two articles">Find path</button>
         <button id="copyLinkBtn" class="btn-2" title="Copy a shareable link to this journey">Copy link</button>
         <button id="snapshotBtn" class="btn-2" title="Download a PNG of the current view">Snapshot</button>
         <button id="saveBtn" class="btn-2" title="Save this journey">Save</button>
@@ -43,14 +52,28 @@
           <button id="bookmarksBtn" class="btn-2" title="Saved journeys">Bookmarks ▾</button>
           <div id="bookmarksPanel" class="menu-panel hidden"></div>
         </div>
-        <button id="resetCam" title="Reset camera">🏠 Reset Camera</button>
+        <button id="resetCam" title="Reset camera"><svg class="icon"><use href="#ic-home"/></svg> Reset Camera</button>
       </div>
     </header>
 
     <nav id="breadcrumbs"></nav>
 
     <main>
-      <aside id="info">
+      <aside id="info" class="empty">
+        <div id="welcome">
+          <svg class="welcome-star" viewBox="0 0 24 24" aria-hidden="true"><use href="#ic-star"/></svg>
+          <h2 class="welcome-title">Explore Wikipedia as a galaxy</h2>
+          <p class="welcome-sub">Each article is a star; its links orbit around it. Click a ray to fly to the next page and fall down the rabbit hole. Start with one of these:</p>
+          <div class="welcome-chips">
+            <button class="starter-chip">Black hole</button>
+            <button class="starter-chip">Octopus</button>
+            <button class="starter-chip">Roman Empire</button>
+            <button class="starter-chip">Jazz</button>
+            <button class="starter-chip">Volcano</button>
+            <button class="starter-chip">Leonardo da Vinci</button>
+          </div>
+          <p class="welcome-hint">…or press <strong>Surprise me</strong> for a random article.</p>
+        </div>
         <h2 id="currentWord">Select a page</h2>
         <div id="summary"></div>
         <div class="hint">Hover a ray to see its title; click to travel. Scroll to zoom. Drag to orbit.</div>
@@ -67,11 +90,23 @@
 
     <div id="helpModal" class="overlay hidden">
       <div class="help-box">
-        <button id="helpClose" class="close" aria-label="Close help">✕</button>
+        <button id="helpClose" class="close" aria-label="Close help"><svg class="icon"><use href="#ic-close"/></svg></button>
         <h2>How it works</h2>
         <p>Use the search box to find a page and press <strong>Search</strong> to explore it.</p>
         <p>Toggle <strong>Backlinks</strong> to include pages that link back to the current page.</p>
         <p>Click stars to travel between pages. Scroll to zoom and drag to orbit. Use the house button to reset the camera.</p>
+      </div>
+    </div>
+
+    <div id="pathOverlay" class="overlay hidden">
+      <div class="path-box">
+        <button id="pathClose" class="close" aria-label="Close"><svg class="icon"><use href="#ic-close"/></svg></button>
+        <h2>Find a path</h2>
+        <p class="path-help">Discover a chain of links from one article to another (up to 2 hops), then fly the route.</p>
+        <label class="path-field"><span>From</span><input id="pathFrom" type="text" placeholder="e.g., Octopus" /></label>
+        <label class="path-field"><span>To</span><input id="pathTo" type="text" placeholder="e.g., Jazz" /></label>
+        <div class="path-actions"><button id="pathFind">Find path</button></div>
+        <div id="pathStatus" class="path-status"></div>
       </div>
     </div>
 
@@ -83,10 +118,10 @@
             <img id="previewThumb" alt="" />
             <p id="previewExtract"></p>
           </div>
-          <div class="preview-cta">★ Click anywhere here to travel</div>
+          <div class="preview-cta"><svg class="icon"><use href="#ic-star"/></svg> Click anywhere here to travel</div>
           <div class="attrib">Content from Wikipedia • CC BY-SA 4.0</div>
         </div>
-        <a id="previewLink" class="preview-link" href="#" target="_blank" rel="noopener">Open on Wikipedia ↗︎</a>
+        <a id="previewLink" class="preview-link" href="#" target="_blank" rel="noopener">Open on Wikipedia <svg class="icon"><use href="#ic-external"/></svg></a>
       </div>
     </div>
 

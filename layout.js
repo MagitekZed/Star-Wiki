@@ -1,4 +1,4 @@
-import { wikiFetch, getRandomTitle } from './wikipedia.js';
+import { wikiFetch, getRandomTitle, findPath } from './wikipedia.js';
 import {
   onGo,
   setShowBacklinks,
@@ -66,6 +66,69 @@ if (copyLinkBtn) copyLinkBtn.addEventListener('click', ()=> copyShareLink());
 const snapshotBtn = document.getElementById('snapshotBtn');
 if (snapshotBtn) snapshotBtn.addEventListener('click', ()=> saveSnapshot());
 
+// ===== Path finder ("six degrees") =====
+const pathOverlay = document.getElementById('pathOverlay');
+const pathBtn = document.getElementById('pathBtn');
+const pathClose = document.getElementById('pathClose');
+const pathFrom = document.getElementById('pathFrom');
+const pathTo = document.getElementById('pathTo');
+const pathFind = document.getElementById('pathFind');
+const pathStatus = document.getElementById('pathStatus');
+let pathSearchId = 0; // ignore results from a superseded/closed search
+
+function openPathModal(){
+  if (!pathOverlay) return;
+  const hist = getHistory();
+  if (hist.length && pathFrom && !pathFrom.value.trim()) pathFrom.value = hist[hist.length - 1];
+  pathStatus.textContent = '';
+  pathOverlay.classList.remove('hidden');
+  (pathFrom.value.trim() ? pathTo : pathFrom).focus();
+}
+function closePathModal(){
+  if (!pathOverlay) return;
+  pathSearchId++; // invalidate any in-flight search
+  pathOverlay.classList.add('hidden');
+}
+
+async function runPathFind(){
+  const from = pathFrom.value.trim();
+  const to = pathTo.value.trim();
+  if (!from || !to) { pathStatus.textContent = 'Enter both a start and an end article.'; return; }
+  const myId = ++pathSearchId;
+  pathFind.disabled = true;
+  pathStatus.textContent = 'Searching…';
+  let result;
+  try {
+    result = await findPath(from, to, (msg)=>{ if (myId === pathSearchId) pathStatus.textContent = msg; });
+  } catch {
+    result = { status: 'error' };
+  }
+  if (myId !== pathSearchId) return; // closed or superseded
+  pathFind.disabled = false;
+  if (result.status === 'found') {
+    const route = result.path.join('  →  ');
+    pathStatus.innerHTML = `Found: <span class="path-route"></span>`;
+    pathStatus.querySelector('.path-route').textContent = route;
+    setTimeout(()=>{ if (myId === pathSearchId) { closePathModal(); loadPath(result.path); } }, 700);
+  } else if (result.status === 'invalid') {
+    pathStatus.innerHTML = `<span class="path-miss">Couldn't find one of those articles. Check the spelling.</span>`;
+  } else {
+    pathStatus.innerHTML = `<span class="path-miss">No path found within 2 links. They may be far apart — try a broader endpoint.</span>`;
+  }
+}
+
+if (pathBtn) pathBtn.addEventListener('click', openPathModal);
+if (pathClose) pathClose.addEventListener('click', closePathModal);
+if (pathOverlay) pathOverlay.addEventListener('click', e=>{ if (e.target === pathOverlay) closePathModal(); });
+if (pathFind) pathFind.addEventListener('click', runPathFind);
+if (pathTo) pathTo.addEventListener('keydown', e=>{ if (e.key === 'Enter') runPathFind(); });
+if (pathFrom) pathFrom.addEventListener('keydown', e=>{ if (e.key === 'Enter') pathTo.focus(); });
+
+// First-run starter chips
+document.querySelectorAll('#welcome .starter-chip').forEach(chip => {
+  chip.addEventListener('click', ()=> onGo(chip.textContent));
+});
+
 // ===== Bookmarks (saved journeys) =====
 const BM_KEY = 'starwiki.bookmarks';
 const bookmarksPanel = document.getElementById('bookmarksPanel');
@@ -108,7 +171,7 @@ function renderBookmarks(){
 
     const del = document.createElement('button');
     del.className = 'bm-del';
-    del.textContent = '✕';
+    del.innerHTML = '<svg class="icon"><use href="#ic-close"/></svg>';
     del.title = 'Delete journey';
     del.setAttribute('aria-label', 'Delete journey');
     del.addEventListener('click', (e)=>{

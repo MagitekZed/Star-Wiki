@@ -29,6 +29,17 @@ camera.position.copy(DEFAULT_CAM_POS);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.target.set(0, 0, 0);
+controls.autoRotate = false;
+controls.autoRotateSpeed = 0.3; // very gentle idle drift
+
+// Idle drift: after a few seconds of no interaction, slowly orbit. Honor reduced-motion.
+const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const IDLE_MS = 5000;
+let lastInteraction = performance.now();
+function markInteraction(){ lastInteraction = performance.now(); }
+renderer.domElement.addEventListener('pointerdown', markInteraction);
+renderer.domElement.addEventListener('wheel', markInteraction, { passive: true });
+controls.addEventListener('start', markInteraction);
 
 // Background starfield for depth
 const bgStars = createBackgroundStars();
@@ -416,6 +427,27 @@ function buildStarInto(centerTitle, data, gStar, gEdge, map, prevTitle=null, pre
   gStar.add(centerMesh);
   map.set(centerTitle, centerMesh);
 
+  // Hero treatment: a soft warm halo + a slowly rotating corona behind the core,
+  // so the page you're on reads as a sun among its satellites. Decorative only —
+  // unpickable (raycast no-op) and untitled so hover/click ignore them.
+  const halo = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: starTexture, color: 0xffeccf, transparent: true,
+    blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.22
+  }));
+  halo.scale.setScalar(7);
+  halo.userData = { kind: 'centerHalo', baseScale: 7 };
+  halo.raycast = () => {};
+  gStar.add(halo);
+
+  const corona = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: starTexture, color: 0xcfe0ff, transparent: true,
+    blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.45
+  }));
+  corona.scale.setScalar(3.6);
+  corona.userData = { kind: 'centerCorona', baseScale: 3.6 };
+  corona.raycast = () => {};
+  gStar.add(corona);
+
   const neighbors = data.neighbors.slice(0,20);
   const filtered = prevTitle ? neighbors.filter(nb => nb !== prevTitle) : neighbors;
 
@@ -620,7 +652,10 @@ async function travelToNeighbor(targetTitle, addToHistory=true){
     const curTarget = fromAbs.clone().lerp(to, ease);
     controls.target.copy(curTarget);
 
-    const curCam = curTarget.clone().add(startOffset);
+    // Flight dolly: pull back at mid-travel and settle back in on arrival (no
+    // change at the endpoints, so there's no jump). Skipped under reduced-motion.
+    const dolly = REDUCED ? 1 : (1 + 0.12 * Math.sin(ease * Math.PI));
+    const curCam = curTarget.clone().add(startOffset.clone().multiplyScalar(dolly));
     camera.position.copy(curCam);
 
     const fadeOut = t < fadeStart ? 1 : 1 - (t - fadeStart)/(1 - fadeStart);
@@ -677,6 +712,8 @@ let sidebarToken = 0; // bumped each render so async facts can detect a stale si
 
 function updateSidebar(center, neighbors, chainPrev, metaByTitle = {}){
   const token = ++sidebarToken;
+  const info = document.getElementById('info');
+  if (info) info.classList.remove('empty'); // leave the first-run welcome state
   const heading = document.getElementById('currentWord');
   heading.textContent = center.title;
 
@@ -827,7 +864,7 @@ function renderNeighborList(){
     ext.className = 'ext';
     ext.href = `https://en.wikipedia.org/wiki/${encodeURIComponent(nb)}`;
     ext.target = '_blank';
-    ext.textContent = '↗';
+    ext.innerHTML = '<svg class="icon"><use href="#ic-external"/></svg>';
     ext.setAttribute('aria-label', 'Open on Wikipedia');
     ext.addEventListener('click', e=> e.stopPropagation());
     ext.addEventListener('keydown', e=> e.stopPropagation());
@@ -1250,6 +1287,8 @@ function fadeInGroups(){
 
 function animate(){
   requestAnimationFrame(animate);
+  // Drift the camera slowly when idle (not mid-travel, no preview open, motion allowed).
+  controls.autoRotate = !REDUCED && !isAnimating && !previewTarget && (performance.now() - lastInteraction > IDLE_MS);
   controls.update();
   updateHover();
 
@@ -1286,12 +1325,24 @@ function animate(){
   });
 
   starGroup.children.forEach((obj) => {
-    if (obj.userData && obj.userData.kind === 'neighbor' && (!hovered || hovered.object !== obj)) {
-      const base = obj.userData.baseScale || 1;
-      const f = obj.userData.twFreq || 2;
-      const p = obj.userData.twPhase || 0;
-      const a = obj.userData.twAmp || 0.12;
+    const ud = obj.userData;
+    if (!ud) return;
+    if (ud.kind === 'neighbor' && (!hovered || hovered.object !== obj)) {
+      const base = ud.baseScale || 1;
+      const f = ud.twFreq || 2;
+      const p = ud.twPhase || 0;
+      const a = ud.twAmp || 0.12;
       const s = base * (1 + a * Math.sin(now * f + p));
+      obj.scale.set(s, s, 1);
+    } else if (ud.kind === 'center') {
+      const s = (ud.baseScale || 2) * (1 + 0.06 * Math.sin(now * 1.3));
+      obj.scale.set(s, s, 1);
+    } else if (ud.kind === 'centerHalo') {
+      const s = (ud.baseScale || 7) * (1 + 0.10 * Math.sin(now * 0.9));
+      obj.scale.set(s, s, 1);
+    } else if (ud.kind === 'centerCorona') {
+      obj.material.rotation += 0.0025;
+      const s = (ud.baseScale || 3.6) * (1 + 0.08 * Math.sin(now * 1.1 + 1));
       obj.scale.set(s, s, 1);
     }
   });
