@@ -66,26 +66,6 @@ vignettePass.uniforms.offset.value = 1.05;
 vignettePass.uniforms.darkness.value = 1.25;
 composer.addPass(vignettePass);
 composer.addPass(new OutputPass());
-// Final cinematic color grade (operates on the displayed sRGB image): a touch of
-// contrast + saturation, indigo lift in shadows, gentle warmth in highlights.
-const GradeShader = {
-  uniforms: { tDiffuse: { value: null } },
-  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
-  fragmentShader: [
-    'uniform sampler2D tDiffuse;',
-    'varying vec2 vUv;',
-    'void main(){',
-    '  vec3 c = texture2D(tDiffuse, vUv).rgb;',
-    '  c = (c - 0.5) * 1.06 + 0.5;',                       // contrast
-    '  float l = dot(c, vec3(0.2126, 0.7152, 0.0722));',   // luma
-    '  c = mix(vec3(l), c, 1.12);',                        // saturation
-    '  c += vec3(0.03, 0.04, 0.09) * (1.0 - l);',          // indigo lift in shadows
-    '  c += vec3(0.04, 0.02, 0.0) * l;',                   // warmth in highlights
-    '  gl_FragColor = vec4(clamp(c, 0.0, 1.0), 1.0);',
-    '}'
-  ].join('\n')
-};
-composer.addPass(new ShaderPass(GradeShader));
 // Reallocate the render targets at the correct size now that MSAA is enabled.
 composer.setSize(container.clientWidth, container.clientHeight);
 
