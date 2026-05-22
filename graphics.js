@@ -94,6 +94,8 @@ const previewBody = document.getElementById('previewBody');
 const previewTitle = document.getElementById('previewTitle');
 const previewExtract = document.getElementById('previewExtract');
 const previewThumb = document.getElementById('previewThumb');
+// Hide the thumbnail if its source fails to load (avoids a broken-image box).
+previewThumb.addEventListener('error', ()=>{ previewThumb.style.display = 'none'; });
 const previewLink = document.getElementById('previewLink');
 
 // ====== Star groups ======
@@ -929,7 +931,8 @@ async function openPreview(title, x, y){
   previewTarget = title;
   previewTitle.textContent = title;
   previewExtract.textContent = 'Loading…';
-  previewThumb.src = '';
+  previewThumb.removeAttribute('src');
+  previewThumb.style.display = 'none';
   previewLink.href = `https://en.wikipedia.org/wiki/${encodeURIComponent(title)}`;
   previewOverlay.classList.remove('hidden');
   positionPreview(x, y);
@@ -938,7 +941,13 @@ async function openPreview(title, x, y){
   const data = await fetchSummary(title);
   if (previewTarget !== title) return;
   previewTitle.textContent = data.title || title;
-  if (data.thumbnail) previewThumb.src = data.thumbnail; else previewThumb.removeAttribute('src');
+  if (data.thumbnail) {
+    previewThumb.src = data.thumbnail;
+    previewThumb.style.display = '';
+  } else {
+    previewThumb.removeAttribute('src');
+    previewThumb.style.display = 'none';
+  }
   if (data.extract) {
     const first = data.extract.split('. ').slice(0,2).join('. ');
     previewExtract.textContent = first;
