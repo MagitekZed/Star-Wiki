@@ -69,6 +69,7 @@ window.addEventListener('resize', () => {
   bloomPass.setSize(w, h);
   // Fat lines need their resolution kept in sync or their pixel width is wrong.
   scene.traverse(o => { if (o.material && o.material.isLineMaterial) o.material.resolution.set(w, h); });
+  updateViewOffset();
 });
 
 // Tooltip
@@ -1111,6 +1112,21 @@ function updateHover(){
 }
 
 
+// Shift the projection left so the look-at point (the center star) lands in the
+// middle of the canvas area NOT covered by the always-open right sidebar.
+function updateViewOffset(){
+  const w = container.clientWidth, h = container.clientHeight;
+  if (!w || !h) return;
+  const info = document.getElementById('info');
+  let obscured = 0;
+  if (info) {
+    const r = info.getBoundingClientRect();
+    if (r.width > 0) obscured = Math.max(0, w - r.left); // sidebar + its right margin
+  }
+  if (obscured > 1) camera.setViewOffset(w, h, obscured / 2, 0, w, h);
+  else camera.clearViewOffset();
+}
+
 function centerCameraOnCurrent(){
   const pos = (centerPositions.get(currentTitle) || starGroup.position || new THREE.Vector3()).clone();
   controls.target.copy(pos);
@@ -1297,6 +1313,7 @@ function showToast(msg){
 
 function init(){
   document.getElementById('loading').classList.add('hidden');
+  updateViewOffset();
   updateBreadcrumbs();
   animate();
   const path = parsePathFromHash();
