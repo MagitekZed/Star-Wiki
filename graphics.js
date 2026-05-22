@@ -66,6 +66,26 @@ vignettePass.uniforms.offset.value = 1.05;
 vignettePass.uniforms.darkness.value = 1.25;
 composer.addPass(vignettePass);
 composer.addPass(new OutputPass());
+// Final cinematic color grade (operates on the displayed sRGB image): a touch of
+// contrast + saturation, indigo lift in shadows, gentle warmth in highlights.
+const GradeShader = {
+  uniforms: { tDiffuse: { value: null } },
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
+  fragmentShader: [
+    'uniform sampler2D tDiffuse;',
+    'varying vec2 vUv;',
+    'void main(){',
+    '  vec3 c = texture2D(tDiffuse, vUv).rgb;',
+    '  c = (c - 0.5) * 1.06 + 0.5;',                       // contrast
+    '  float l = dot(c, vec3(0.2126, 0.7152, 0.0722));',   // luma
+    '  c = mix(vec3(l), c, 1.12);',                        // saturation
+    '  c += vec3(0.03, 0.04, 0.09) * (1.0 - l);',          // indigo lift in shadows
+    '  c += vec3(0.04, 0.02, 0.0) * l;',                   // warmth in highlights
+    '  gl_FragColor = vec4(clamp(c, 0.0, 1.0), 1.0);',
+    '}'
+  ].join('\n')
+};
+composer.addPass(new ShaderPass(GradeShader));
 // Reallocate the render targets at the correct size now that MSAA is enabled.
 composer.setSize(container.clientWidth, container.clientHeight);
 
@@ -163,9 +183,14 @@ const ghostQueue = []; // order of ghost titles
 const MAX_GHOSTS = 5;
 const SEGMENT_DIST = 40; // fixed spacing between centers
 
-const trailMaterial = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.35, depthWrite: false });
-const trailGeometry = new THREE.BufferGeometry();
-const trailLine = new THREE.Line(trailGeometry, trailMaterial);
+const trailMaterial = new LineMaterial({
+  color: 0x9fb8ff, linewidth: 1.6, transparent: true, opacity: 0.5,
+  blending: THREE.AdditiveBlending, depthWrite: false
+});
+trailMaterial.resolution.set(container.clientWidth, container.clientHeight);
+const trailGeometry = new LineGeometry();
+const trailLine = new Line2(trailGeometry, trailMaterial);
+trailLine.visible = false;
 scene.add(trailLine);
 
 // ====== Interaction ======
@@ -268,10 +293,14 @@ function ghostify(title){
 function updateTrail(){
   const pts = history.map(t => centerPositions.get(t)).filter(Boolean);
   if (pts.length < 2) {
-    trailGeometry.setFromPoints([]);
-  } else {
-    trailGeometry.setFromPoints(pts);
+    trailLine.visible = false;
+    return;
   }
+  const arr = [];
+  pts.forEach(p => { arr.push(p.x, p.y, p.z); });
+  trailGeometry.setPositions(arr);
+  trailLine.computeLineDistances();
+  trailLine.visible = trailMode;
 }
 
 // ====== Star building ======
@@ -347,14 +376,17 @@ function opacityFromRank(rank, total){
 const _blooms = []; // { mesh, start, delayMs, target }
 
 function placeNeighbor(title, posArray, group = starGroup, map = wordToMesh){
-  const baseMat = visited.has(title)
+  const isVisited = visited.has(title);
+  const baseMat = isVisited
     ? materialVisited
     : (showBacklinks ? materialBackNeighbor : materialNeighbor);
   const mesh = new THREE.Sprite(baseMat.clone());
   mesh.position.set(posArray[0], posArray[1], posArray[2]);
   const th = seededHash(title);
+  // Visited stars read as smaller + dimmer ("been there").
+  const baseScale = isVisited ? 0.8 : 1.2;
   mesh.userData = {
-    title, kind: 'neighbor', baseScale: 1.2,
+    title, kind: 'neighbor', baseScale,
     // Per-star twinkle so the cluster breathes organically instead of in lockstep.
     twFreq: 1.0 + (th % 100) / 100 * 1.8,   // 1.0 .. 2.8 Hz-ish
     twPhase: ((th >> 7) % 628) / 100,        // 0 .. ~2π
@@ -366,7 +398,7 @@ function placeNeighbor(title, posArray, group = starGroup, map = wordToMesh){
     mesh,
     start: performance.now(),
     delayMs: 60 + (seededHash(title) % 180),
-    target: 1.2
+    target: baseScale
   });
   group.add(mesh);
   map.set(title, mesh);
@@ -466,12 +498,9 @@ function buildStarInto(centerTitle, data, gStar, gEdge, map, prevTitle=null, pre
 }
 
 function rebuildStar(title, addToHistory=true){
-  const overlay = document.getElementById('loading');
-  const text = document.getElementById('loadingText');
-  text.textContent = `Loading ${title}…`;
-  overlay.classList.remove('hidden');
+  setLoading(true);
   return getPageStar(title, showBacklinks).then(star => {
-    overlay.classList.add('hidden');
+    setLoading(false);
     const canonical = star.center.title;
     if (addToHistory) {
       if (historyIndex < history.length - 1) history = history.slice(0, historyIndex + 1);
@@ -495,7 +524,7 @@ function rebuildStar(title, addToHistory=true){
     starGroup.visible = true; edgeGroup.visible = true;
     wordToMesh.clear();
     clusterGroups.clear(); centerPositions.clear(); ghostQueue.length = 0;
-    trailGeometry.setFromPoints([]);
+    trailLine.visible = false;
     buildStarInto(canonical, star, starGroup, edgeGroup, wordToMesh);
     clusterGroups.set(canonical, { star: starGroup, edge: edgeGroup });
     centerPositions.set(canonical, new THREE.Vector3(0,0,0));
@@ -508,7 +537,7 @@ function rebuildStar(title, addToHistory=true){
     isAnimating = false;
   }).catch(err => {
     console.error(err);
-    overlay.classList.add('hidden');
+    setLoading(false);
     showToast('Failed to load page.');
     isAnimating = false;
   });
@@ -516,19 +545,16 @@ function rebuildStar(title, addToHistory=true){
 
 async function refreshCurrentNeighbors(){
   if (!currentTitle) return;
-  const overlay = document.getElementById('loading');
-  const text = document.getElementById('loadingText');
-  text.textContent = `Loading ${currentTitle}…`;
-  overlay.classList.remove('hidden');
+  setLoading(true);
   let star;
   try {
     star = await getPageStar(currentTitle, showBacklinks);
   } catch (e) {
-    overlay.classList.add('hidden');
+    setLoading(false);
     showToast('Failed to load page.');
     return;
   }
-  overlay.classList.add('hidden');
+  setLoading(false);
 
   const prevTitle = getChainPrev();
   const pos = centerPositions.get(currentTitle) || new THREE.Vector3(0,0,0);
@@ -587,20 +613,17 @@ async function travelToNeighbor(targetTitle, addToHistory=true){
 
   isAnimating = true;
 
-  const overlay = document.getElementById('loading');
-  const text = document.getElementById('loadingText');
-  text.textContent = `Loading ${targetTitle}…`;
-  overlay.classList.remove('hidden');
+  setLoading(true);
   let star;
   try {
     star = await getPageStar(targetTitle, showBacklinks);
   } catch (e) {
-    overlay.classList.add('hidden');
+    setLoading(false);
     showToast('Failed to load page.');
     isAnimating = false;
     return;
   }
-  overlay.classList.add('hidden');
+  setLoading(false);
 
   const canonical = star.center.title;
   const fromAbs = from.clone();
@@ -789,7 +812,7 @@ function updateSidebar(center, neighbors, chainPrev, metaByTitle = {}){
     }
   }
 
-  renderNeighborList();
+  renderNeighborList(true);
 }
 
 async function renderFacts(wikidataId, box, token){
@@ -812,7 +835,7 @@ async function renderFacts(wikidataId, box, token){
   box.appendChild(dl);
 }
 
-function renderNeighborList(){
+function renderNeighborList(animateIn = false){
   const container = document.getElementById('neighbors');
   if (!container) return;
   container.innerHTML = '';
@@ -836,10 +859,14 @@ function renderNeighborList(){
     list.sort((a, b) => ((currentMeta[b] && currentMeta[b].length) || 0) - ((currentMeta[a] && currentMeta[a].length) || 0));
   }
 
-  list.forEach(nb => {
+  list.forEach((nb, i) => {
     const row = document.createElement('div');
     row.className = 'neighbor';
     row.tabIndex = 0;
+    if (animateIn) {
+      row.classList.add('enter');
+      row.style.animationDelay = (i * 28) + 'ms';
+    }
     if (visited.has(nb)) row.classList.add('visited');
     row.addEventListener('click', e=> openPreview(nb, e.clientX, e.clientY));
     row.addEventListener('keydown', e=>{ if(e.key==='Enter') openPreview(nb); });
@@ -1436,8 +1463,12 @@ function showToast(msg){
   setTimeout(()=> t.classList.remove('show'), 2500);
 }
 
+function setLoading(on){
+  const p = document.getElementById('progress');
+  if (p) p.classList.toggle('active', on);
+}
+
 function init(){
-  document.getElementById('loading').classList.add('hidden');
   updateViewOffset();
   updateBreadcrumbs();
   animate();
