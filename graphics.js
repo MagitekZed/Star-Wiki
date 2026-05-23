@@ -1728,7 +1728,7 @@ async function fetchNeighborInfo(title, row){
 // ====== Preview modal ======
 function positionPreview(x, y){
   previewModal.style.transform = '';
-  if (x == null || y == null || window.innerWidth < 600) {
+  if (x == null || y == null || window.innerWidth <= 720) {
     previewModal.style.left = '50%';
     previewModal.style.top = '50%';
     previewModal.style.transform = 'translate(-50%, -50%)';
@@ -1816,6 +1816,7 @@ function previewKeyHandler(e){
 previewOverlay.addEventListener('click', e=>{ if (e.target === previewOverlay) closePreview(); });
 previewBody.addEventListener('click', confirmPreview);
 previewLink.addEventListener('click', e=> e.stopPropagation());
+document.getElementById('previewClose')?.addEventListener('click', e=>{ e.stopPropagation(); closePreview(); });
 
 function updateBreadcrumbs(){
   const nav = document.getElementById('breadcrumbs');

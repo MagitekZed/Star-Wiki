@@ -319,7 +319,10 @@ footer { position:relative; z-index:2; padding:7px 16px; border-top:1px solid va
 
   .preview-overlay { position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(14,15,19,0.8); z-index:80; }
   .preview-overlay.hidden { display:none; }
-  .preview-modal { position:absolute; max-width:420px; background:#0f1220; border:1px solid var(--edge); border-radius:8px; padding:12px; color:var(--text); box-shadow:0 4px 8px rgba(0,0,0,0.5); }
+  .preview-modal { position:absolute; width:auto; max-width:420px; background:#0f1220; border:1px solid var(--edge); border-radius:8px; padding:12px; color:var(--text); box-shadow:0 4px 8px rgba(0,0,0,0.5); }
+  .preview-close { display:none; position:absolute; top:6px; right:6px; width:30px; height:30px; align-items:center; justify-content:center; background:rgba(255,255,255,0.06); border:1px solid var(--hairline); color:var(--muted); cursor:pointer; border-radius:8px; z-index:2; }
+  .preview-close:hover { color:var(--text); background:rgba(255,255,255,0.12); }
+  .preview-close .icon { width:16px; height:16px; }
   .preview-body { cursor:pointer; }
   .preview-body:focus, .preview-body:focus-visible { outline:none; }
   .preview-body h3 { margin:0 0 6px; font-size:16px; }
@@ -336,14 +339,25 @@ footer { position:relative; z-index:2; padding:7px 16px; border-top:1px solid va
 @media (max-width: 1040px) { .brand-tag { display:none; } }
 
 /* ===== Mobile / responsive: bottom-sheet sidebar over a full-width canvas ===== */
-.sheet-handle { display:none; width:40px; height:4px; padding:0; border:none; border-radius:2px; background:var(--muted); opacity:0.5; margin:0 auto 10px; cursor:pointer; }
-.sheet-handle:hover { opacity:0.8; }
+/* Items that only belong in the mobile "More" menu */
+.mobile-only { display:none; }
+/* Grab handle: small visible bar, generous (padded) touch target */
+.sheet-handle { display:none; width:44px; height:5px; padding:12px 20px; border:none; border-radius:3px;
+  background:var(--muted); background-clip:content-box; box-sizing:content-box; opacity:0.55; margin:0 auto 2px;
+  cursor:grab; touch-action:none; }
+.sheet-handle:hover { opacity:0.85; }
+.sheet-handle:active { cursor:grabbing; }
 
 @media (max-width: 720px) {
+  :root { --footer-h: 26px; --sheet-collapsed-h: 88px; }
+
   header { flex-direction:column; align-items:stretch; padding:8px 12px; gap:8px; }
   header h1.brand { font-size:17px; margin:0; }
-  .controls { width:100%; min-width:0; gap:6px; }
+  .controls { width:100%; min-width:0; gap:8px; }
   .search-wrap { flex:1 1 100%; max-width:none; }
+  /* Trim the toolbar so it fits one row: Start over + Help fold into More */
+  #resetBtn, #helpBtn { display:none; }
+  .mobile-only { display:flex; }
   /* Dropdowns span the header width so they never run off-screen */
   .menu { position:static; }
   .menu-panel { left:10px; right:10px; min-width:0; max-width:none; }
@@ -351,13 +365,31 @@ footer { position:relative; z-index:2; padding:7px 16px; border-top:1px solid va
 
   main { padding:0; }
   #info {
-    position:fixed; left:0; right:0; bottom:0; top:auto; z-index:20;
-    width:auto; max-width:none; max-height:48vh;
+    position:fixed; left:0; right:0; bottom:var(--footer-h); top:auto; z-index:20;
+    width:auto; max-width:none;
+    height:var(--sheet-h, 48vh); max-height:86vh;
     padding:6px 14px 16px;
     border-radius:var(--radius-lg) var(--radius-lg) 0 0;
-    transition:max-height var(--dur) var(--ease-out);
+    transition:height var(--dur) var(--ease-out);
+    overflow-y:auto; overscroll-behavior:contain;
   }
-  #info.collapsed { max-height:40px; overflow:hidden; }
-  .sheet-handle { display:block; margin:0 auto 8px; }
-  footer { display:none; }
+  #info.dragging { transition:none; }            /* follow the finger 1:1 */
+  body.sheet-collapsed #info { overflow:hidden; }
+  .sheet-handle { display:block; }
+
+  /* Slim, always-visible attribution the sheet pulls up out of */
+  footer { display:block; position:fixed; left:0; right:0; bottom:0; z-index:18;
+    height:var(--footer-h); padding:0 14px; line-height:var(--footer-h);
+    text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  footer small { font-size:10px; }
+
+  /* Legend rides just above the collapsed sheet; hides while the sheet is open */
+  .map-legend, .type-legend { left:10px; right:10px; max-width:none;
+    bottom:calc(var(--footer-h) + var(--sheet-collapsed-h) + 8px); }
+  body:not(.sheet-collapsed) .map-legend,
+  body:not(.sheet-collapsed) .type-legend { opacity:0 !important; pointer-events:none; }
+
+  /* Tap-a-spoke preview: near-full-width with a small side buffer, plus an X */
+  .preview-modal { width:calc(100vw - 24px); max-width:440px; padding:14px; padding-top:18px; }
+  .preview-close { display:flex; }
 }

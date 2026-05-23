@@ -78,13 +78,52 @@ if (copyLinkBtn) copyLinkBtn.addEventListener('click', ()=>{ copyShareLink(); do
 const snapshotBtn = document.getElementById('snapshotBtn');
 if (snapshotBtn) snapshotBtn.addEventListener('click', ()=>{ saveSnapshot(); document.getElementById('morePanel')?.classList.add('hidden'); });
 
-// Mobile bottom-sheet collapse toggle (recompute camera view offset once settled)
+// Mobile bottom-sheet: drag the handle to resize (snap to peek / half / full),
+// or tap it to toggle. Recompute the camera view offset once the sheet settles.
 const sheetHandle = document.getElementById('sheetHandle');
 const infoEl = document.getElementById('info');
 if (sheetHandle && infoEl) {
-  sheetHandle.addEventListener('click', ()=> infoEl.classList.toggle('collapsed'));
-  infoEl.addEventListener('transitionend', (e)=>{ if (e.propertyName === 'max-height') window.dispatchEvent(new Event('resize')); });
+  const COLLAPSED = 88; // keep in sync with --sheet-collapsed-h
+  const isMobile = () => window.matchMedia('(max-width: 720px)').matches;
+  const snaps = () => { const h = window.innerHeight; return [COLLAPSED, Math.round(h*0.5), Math.round(h*0.86)]; };
+  const curHeight = () => infoEl.getBoundingClientRect().height;
+  const nearest = (h) => snaps().reduce((a,b)=> Math.abs(b-h) < Math.abs(a-h) ? b : a);
+  const applyHeight = (h)=>{
+    infoEl.style.setProperty('--sheet-h', h + 'px');
+    document.body.classList.toggle('sheet-collapsed', h <= COLLAPSED + 4);
+  };
+
+  let dragging = false, startY = 0, startH = 0, moved = 0;
+  sheetHandle.addEventListener('pointerdown', (e)=>{
+    if (!isMobile()) return;
+    dragging = true; moved = 0; startY = e.clientY; startH = curHeight();
+    infoEl.classList.add('dragging');
+    try { sheetHandle.setPointerCapture(e.pointerId); } catch {}
+  });
+  sheetHandle.addEventListener('pointermove', (e)=>{
+    if (!dragging) return;
+    const dy = startY - e.clientY;            // drag up = grow
+    moved = Math.max(moved, Math.abs(dy));
+    const [lo,, hi] = snaps();
+    infoEl.style.setProperty('--sheet-h', Math.min(hi, Math.max(lo, startH + dy)) + 'px');
+  });
+  const endDrag = (e)=>{
+    if (!dragging) return;
+    dragging = false;
+    infoEl.classList.remove('dragging');
+    try { sheetHandle.releasePointerCapture(e.pointerId); } catch {}
+    const [lo, mid] = snaps();
+    applyHeight(moved < 6 ? (curHeight() <= lo + 4 ? mid : lo) : nearest(curHeight()));
+  };
+  sheetHandle.addEventListener('pointerup', endDrag);
+  sheetHandle.addEventListener('pointercancel', endDrag);
+
+  infoEl.addEventListener('transitionend', (e)=>{ if (e.propertyName === 'height') window.dispatchEvent(new Event('resize')); });
 }
+
+// Mobile "More" menu shortcuts that mirror the demoted toolbar buttons
+document.getElementById('startOverItem')?.addEventListener('click', ()=>{ document.getElementById('morePanel')?.classList.add('hidden'); document.getElementById('resetBtn')?.click(); });
+document.getElementById('helpItem')?.addEventListener('click', ()=>{ document.getElementById('morePanel')?.classList.add('hidden'); document.getElementById('helpBtn')?.click(); });
 
 // ===== Path finder ("six degrees") =====
 const pathOverlay = document.getElementById('pathOverlay');
