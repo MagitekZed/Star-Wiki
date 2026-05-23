@@ -1207,25 +1207,24 @@ function updateOverviewLabels(){
 // Per-frame: orient each chevron to its link's on-screen angle (robust to free
 // rotation) and run a bright band along it (source → target, or both halves → middle).
 const _chevA = new THREE.Vector3(), _chevB = new THREE.Vector3();
+const TWO_PI = Math.PI * 2;
 function updateOverviewChevrons(tMs){
   if (!overviewChevrons.length) return;
   const aspect = (container.clientWidth || 1) / (container.clientHeight || 1);
   const reveal = REDUCED ? 1 : Math.min(1, (tMs - overviewChevronsBuiltAt) / 700);
-  const head = (tMs * 0.0002) % 1; // bright-band position, sweeping source → target
   for (const link of overviewChevrons){
     _chevA.copy(link.pa).project(camera);
     _chevB.copy(link.pb).project(camera);
     const angle = Math.atan2(_chevB.y - _chevA.y, (_chevB.x - _chevA.x) * aspect);
+    const cyc = link.cyc;
     for (const s of link.sprites){
       const u = s.userData;
       s.material.rotation = u.pointSign > 0 ? angle : angle + Math.PI;
-      let lit = 0;
-      if (!REDUCED){
-        let d = u.flow - head; d -= Math.round(d);          // wrap to [-0.5, 0.5]
-        lit = Math.max(0, 1 - Math.abs(d) / 0.16);           // triangular bright band
-      }
-      s.material.opacity = reveal * (0.42 + 0.55 * lit);
-      const sc = u.baseScale * (1 + 0.45 * lit);
+      // A brightness wave flows across ALL chevrons toward the target / the middle
+      // (crests travel source→target in ~2.5s; the chevrons stay visible as the line).
+      const wave = REDUCED ? 0.7 : (0.5 + 0.5 * Math.cos(cyc * (u.flow - tMs / 2500) * TWO_PI));
+      s.material.opacity = reveal * (0.4 + 0.6 * wave);
+      const sc = u.baseScale * (1 + 0.2 * wave);
       s.scale.set(sc, sc, 1);
     }
   }
@@ -1292,30 +1291,32 @@ function buildOverviewInterlinks(pairs){
     if (fwd) e.ab = true; else e.ba = true;
   }
 
-  let count = 0, chevronBudget = 320;
+  let count = 0, chevronBudget = 460;
   for (const e of links.values()){
     if (count >= 120) break;
     const pa = journeyPositions.get(e.a), pb = journeyPositions.get(e.b);
     if (!pa || !pb) continue;
-    // Faint base line shows the connection; chevrons (below) show direction.
+    // The chevrons ARE the (dashed) line; this base line stays invisible but anchors
+    // the no-bloom overlay pass (which is gated on overviewInterlinkLines.length).
     const geo = new LineGeometry();
     geo.setPositions([pa.x, pa.y, pa.z, pb.x, pb.y, pb.z]);
     const mat = crossLinkMaterial.clone();
-    mat.opacity = 0; // faded in by the encode tween
+    mat.opacity = 0;
     mat.resolution.set(container.clientWidth, container.clientHeight);
     const line = new Line2(geo, mat);
-    line.userData = { kind: 'overviewInterlink', _ovTarget: 0.30 };
+    line.userData = { kind: 'overviewInterlink', _ovTarget: 0 };
+    line.visible = false;
     line.raycast = () => {};
     line.layers.set(CROSSLINK_LAYER);
     overviewGroup.add(line);
     overviewInterlinkLines.push(line);
     count++;
 
-    // Direction chevrons. One-way: all point at the target. Two-way: each half
-    // points away from its node toward the middle (they meet in the middle).
+    // Direction chevrons, dense enough to read as a dashed line. One-way: all point
+    // at the target. Two-way: each half points away from its node toward the middle.
     const twoWay = e.ab && e.ba;
     const len = pa.distanceTo(pb);
-    const n = Math.max(2, Math.min(6, Math.round(len / 7)));
+    const n = Math.max(6, Math.min(28, Math.round(len / 2)));
     if (chevronBudget <= 0) continue;
     const sprites = [];
     for (let i = 0; i < n && chevronBudget > 0; i++){
@@ -1330,14 +1331,14 @@ function buildOverviewInterlinks(pairs){
         transparent: true, opacity: 0, depthWrite: false, depthTest: false, blending: THREE.NormalBlending });
       const s = new THREE.Sprite(m);
       s.position.copy(pa).lerp(pb, along);
-      s.userData = { pointSign, flow, baseScale: 1.2 };
-      s.scale.setScalar(1.2);
+      s.userData = { pointSign, flow, baseScale: 0.95 };
+      s.scale.setScalar(0.95);
       s.layers.set(CROSSLINK_LAYER);
       overviewGroup.add(s);
       sprites.push(s);
       chevronBudget--;
     }
-    overviewChevrons.push({ sprites, pa, pb });
+    overviewChevrons.push({ sprites, pa, pb, cyc: Math.max(1, Math.min(5, Math.round(n / 3))) });
   }
   overviewChevronsBuiltAt = performance.now();
 }
