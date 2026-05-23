@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { TrackballControls } from 'three/addons/controls/TrackballControls.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
@@ -26,14 +26,21 @@ const camera = new THREE.PerspectiveCamera(60, container.clientWidth/container.c
 const DEFAULT_CAM_POS = new THREE.Vector3(0, 10, 28);
 camera.position.copy(DEFAULT_CAM_POS);
 
-const controls = new OrbitControls(camera, renderer.domElement);
-controls.enableDamping = true;
+// Trackball (not orbit) controls: no fixed "up" axis, so the camera can tumble all
+// the way around in any direction — the weightless, no-up/down feel of space.
+const controls = new TrackballControls(camera, renderer.domElement);
+controls.rotateSpeed = 1.4;
+controls.zoomSpeed = 1.1;
+controls.noPan = true;             // rotate + zoom only; no accidental panning
+controls.staticMoving = false;     // dynamic damping for a smooth, weighty glide
+controls.dynamicDampingFactor = 0.12;
+controls.minDistance = 2;
+controls.keys = [];                // don't grab A/S/D — leave keys for app shortcuts
 controls.target.set(0, 0, 0);
-controls.autoRotate = false;
-controls.autoRotateSpeed = 0.3; // very gentle idle drift
 
-// Idle drift: after a few seconds of no interaction, slowly orbit. Honor reduced-motion.
+// Idle drift: after a few seconds of no interaction, slowly turn. Honor reduced-motion.
 const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const IDLE_AXIS = new THREE.Vector3(0, 1, 0); // gentle drift around the vertical
 const IDLE_MS = 5000;
 let lastInteraction = performance.now();
 function markInteraction(){ lastInteraction = performance.now(); }
@@ -105,6 +112,7 @@ window.addEventListener('resize', () => {
   //  resolution, halving bloom fidelity on retina and making it look blocky.)
   // Fat lines need their resolution kept in sync or their pixel width is wrong.
   scene.traverse(o => { if (o.material && o.material.isLineMaterial) o.material.resolution.set(w, h); });
+  controls.handleResize(); // TrackballControls caches the viewport size for its rotate math
   updateViewOffset();
 });
 
@@ -2438,7 +2446,11 @@ function fadeInGroups(){
 function animate(){
   requestAnimationFrame(animate);
   // Drift the camera slowly when idle (not mid-travel, no preview/overview open, motion allowed).
-  controls.autoRotate = !REDUCED && !isAnimating && !previewTarget && !overviewActive && (performance.now() - lastInteraction > IDLE_MS);
+  if (!REDUCED && !isAnimating && !previewTarget && !overviewActive && (performance.now() - lastInteraction > IDLE_MS)){
+    const off = camera.position.clone().sub(controls.target);
+    off.applyAxisAngle(IDLE_AXIS, 0.0006);
+    camera.position.copy(controls.target).add(off);
+  }
   controls.update();
   // Keep the nebula skybox centered on the camera so it never magnifies into a grid
   // / hard edge when you've travelled far from the origin.
