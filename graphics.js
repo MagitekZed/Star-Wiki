@@ -220,6 +220,22 @@ const crossLinkMaterial = new LineMaterial({
   blending: THREE.NormalBlending, depthWrite: false, depthTest: false
 });
 
+// A ">" chevron pointing +x, grayscale so the per-sprite colour tint stays accurate.
+function makeChevronTexture(){
+  const size = 64, ctx = Object.assign(document.createElement('canvas'), { width: size, height: size }).getContext('2d');
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = size * 0.15; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  ctx.beginPath();
+  ctx.moveTo(size * 0.34, size * 0.24);
+  ctx.lineTo(size * 0.70, size * 0.50);
+  ctx.lineTo(size * 0.34, size * 0.76);
+  ctx.stroke();
+  const tex = new THREE.CanvasTexture(ctx.canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+const chevronTexture = makeChevronTexture();
+const CHEVRON_COLOR = new THREE.Color(0xb6a8ec);
+
 // The journey path drawn in galaxy-overview mode (spans the whole session).
 const overviewLineMaterial = new LineMaterial({
   // The route is an overlay: normal (not additive) blending + depthTest off so it
@@ -599,6 +615,8 @@ let overviewFadeId = 0;
 // Galaxy-map enrichment (relations drive size + interlinks; Wikidata type drives colour).
 let overviewNodeSprites = new Map(); // title -> sprite
 let overviewInterlinkLines = [];     // faint links among journey nodes (layer 1, no bloom)
+let overviewChevrons = [];           // [{ sprites, pa, pb }] directional chevrons over each interlink
+let overviewChevronsBuiltAt = 0;
 let overviewRelations = new Map();   // title -> connection degree within the journey
 let overviewTypes = new Map();       // title -> type bucket key
 let overviewDataToken = 0;
@@ -1186,6 +1204,33 @@ function updateOverviewLabels(){
   }
 }
 
+// Per-frame: orient each chevron to its link's on-screen angle (robust to free
+// rotation) and run a bright band along it (source → target, or both halves → middle).
+const _chevA = new THREE.Vector3(), _chevB = new THREE.Vector3();
+function updateOverviewChevrons(tMs){
+  if (!overviewChevrons.length) return;
+  const aspect = (container.clientWidth || 1) / (container.clientHeight || 1);
+  const reveal = REDUCED ? 1 : Math.min(1, (tMs - overviewChevronsBuiltAt) / 700);
+  const head = (tMs * 0.0002) % 1; // bright-band position, sweeping source → target
+  for (const link of overviewChevrons){
+    _chevA.copy(link.pa).project(camera);
+    _chevB.copy(link.pb).project(camera);
+    const angle = Math.atan2(_chevB.y - _chevA.y, (_chevB.x - _chevA.x) * aspect);
+    for (const s of link.sprites){
+      const u = s.userData;
+      s.material.rotation = u.pointSign > 0 ? angle : angle + Math.PI;
+      let lit = 0;
+      if (!REDUCED){
+        let d = u.flow - head; d -= Math.round(d);          // wrap to [-0.5, 0.5]
+        lit = Math.max(0, 1 - Math.abs(d) / 0.16);           // triangular bright band
+      }
+      s.material.opacity = reveal * (0.42 + 0.55 * lit);
+      const sc = u.baseScale * (1 + 0.45 * lit);
+      s.scale.set(sc, sc, 1);
+    }
+  }
+}
+
 // ===== Galaxy-map enrichment: relations (size + interlinks) and type (colour) =====
 async function loadOverviewData(){
   const myToken = ++overviewDataToken;
@@ -1233,30 +1278,68 @@ async function loadOverviewData(){
 }
 
 function buildOverviewInterlinks(pairs){
-  const seen = new Set();
   const titleSet = new Set(overviewNodeSprites.keys());
-  let count = 0;
-  for (const [a, b] of (pairs || [])){
+  // Aggregate directed [from,to] pairs into one entry per unordered pair, keeping
+  // which directions exist (a→b and/or b→a). a,b are lexicographic so the key is stable.
+  const links = new Map();
+  for (const [from, to] of (pairs || [])){
+    if (from === to || !titleSet.has(from) || !titleSet.has(to)) continue;
+    const fwd = from < to;
+    const a = fwd ? from : to, b = fwd ? to : from;
+    const key = a + '' + b;
+    let e = links.get(key);
+    if (!e){ e = { a, b, ab: false, ba: false }; links.set(key, e); }
+    if (fwd) e.ab = true; else e.ba = true;
+  }
+
+  let count = 0, chevronBudget = 320;
+  for (const e of links.values()){
     if (count >= 120) break;
-    if (a === b || !titleSet.has(a) || !titleSet.has(b)) continue;
-    const key = a < b ? a + ' ' + b : b + ' ' + a;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    const pa = journeyPositions.get(a), pb = journeyPositions.get(b);
+    const pa = journeyPositions.get(e.a), pb = journeyPositions.get(e.b);
     if (!pa || !pb) continue;
+    // Faint base line shows the connection; chevrons (below) show direction.
     const geo = new LineGeometry();
     geo.setPositions([pa.x, pa.y, pa.z, pb.x, pb.y, pb.z]);
     const mat = crossLinkMaterial.clone();
     mat.opacity = 0; // faded in by the encode tween
     mat.resolution.set(container.clientWidth, container.clientHeight);
     const line = new Line2(geo, mat);
-    line.userData = { kind: 'overviewInterlink', _ovTarget: 0.42 };
+    line.userData = { kind: 'overviewInterlink', _ovTarget: 0.30 };
     line.raycast = () => {};
-    line.layers.set(CROSSLINK_LAYER); // overlay pass, never blooms
+    line.layers.set(CROSSLINK_LAYER);
     overviewGroup.add(line);
     overviewInterlinkLines.push(line);
     count++;
+
+    // Direction chevrons. One-way: all point at the target. Two-way: each half
+    // points away from its node toward the middle (they meet in the middle).
+    const twoWay = e.ab && e.ba;
+    const len = pa.distanceTo(pb);
+    const n = Math.max(2, Math.min(6, Math.round(len / 7)));
+    if (chevronBudget <= 0) continue;
+    const sprites = [];
+    for (let i = 0; i < n && chevronBudget > 0; i++){
+      const along = (i + 0.5) / n;            // 0 at a … 1 at b
+      let pointSign, flow;                     // pointSign: +1 toward b, -1 toward a; flow: 0=source→1=target/middle
+      if (twoWay){
+        if (along < 0.5){ pointSign = 1;  flow = along * 2; }        // a half → middle
+        else            { pointSign = -1; flow = (1 - along) * 2; }  // b half → middle
+      } else if (e.ab){ pointSign = 1;  flow = along; }              // one-way a→b
+      else            { pointSign = -1; flow = 1 - along; }          // one-way b→a
+      const m = new THREE.SpriteMaterial({ map: chevronTexture, color: CHEVRON_COLOR.clone(),
+        transparent: true, opacity: 0, depthWrite: false, depthTest: false, blending: THREE.NormalBlending });
+      const s = new THREE.Sprite(m);
+      s.position.copy(pa).lerp(pb, along);
+      s.userData = { pointSign, flow, baseScale: 1.2 };
+      s.scale.setScalar(1.2);
+      s.layers.set(CROSSLINK_LAYER);
+      overviewGroup.add(s);
+      sprites.push(s);
+      chevronBudget--;
+    }
+    overviewChevrons.push({ sprites, pa, pb });
   }
+  overviewChevronsBuiltAt = performance.now();
 }
 
 function applyOverviewEncoding(degrees, types, pairs){
@@ -1377,6 +1460,7 @@ function resetOverviewEnrichment(){
   cancelAnimationFrame(overviewEncodeRAF);
   overviewNodeSprites = new Map();
   overviewInterlinkLines = [];
+  overviewChevrons = [];
   overviewRelations = new Map();
   overviewTypes = new Map();
   closeMapNodePopup();
@@ -2644,7 +2728,7 @@ function animate(){
   // / hard edge when you've travelled far from the origin.
   if (nebulaMesh) nebulaMesh.position.copy(camera.position);
   applyViewOffset();
-  if (overviewActive) updateOverviewLabels();
+  if (overviewActive){ updateOverviewLabels(); updateOverviewChevrons(performance.now()); }
   else updateHover();
 
   // scale-in blooms
