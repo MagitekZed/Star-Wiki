@@ -258,7 +258,10 @@ container.addEventListener('mousemove', (e)=>{
 let tapStart = null;       // { x, y, t, moved } for the active single-pointer gesture
 let activePointers = 0;
 const LONGPRESS_MS = 450;
+const TAP_MOVE = 10;       // px: a move past this is a drag, not a tap
+const LONGPRESS_MOVE = 16; // px: more generous — a jittery thumb shouldn't cancel a long-press
 let longPressTimer = null;
+let pressTarget = null;    // what was under the finger at press time (locked, so camera drift can't change it)
 function cancelLongPress(){ if (longPressTimer){ clearTimeout(longPressTimer); longPressTimer = null; } }
 function isTouchDragging(){ return lastPointerWasTouch && !!(tapStart && tapStart.moved); }
 renderer.domElement.addEventListener('pointerdown', (e)=>{
@@ -270,15 +273,19 @@ renderer.domElement.addEventListener('pointerdown', (e)=>{
     if (lastPointerWasTouch){
       cancelLongPress();
       const px = e.clientX, py = e.clientY;
+      pressTarget = pickAnyAt(px, py); // lock the target now, before any camera drift
       longPressTimer = setTimeout(()=>{
         longPressTimer = null;
-        if (tapStart && !tapStart.moved){ tapStart = null; openActionRing(px, py); }
+        if (tapStart){ const tgt = pressTarget; tapStart = null; openActionRing(px, py, tgt); }
       }, LONGPRESS_MS);
     }
   } else { if (tapStart) tapStart.moved = true; cancelLongPress(); } // 2nd finger (pinch) cancels tap + long-press
 });
 renderer.domElement.addEventListener('pointermove', (e)=>{
-  if (tapStart && !tapStart.moved && Math.hypot(e.clientX - tapStart.x, e.clientY - tapStart.y) > 10){ tapStart.moved = true; cancelLongPress(); }
+  if (!tapStart) return;
+  const d = Math.hypot(e.clientX - tapStart.x, e.clientY - tapStart.y);
+  if (!tapStart.moved && d > TAP_MOVE) tapStart.moved = true; // tap → drag
+  if (d > LONGPRESS_MOVE) cancelLongPress();                  // only a real drag cancels the long-press
 });
 renderer.domElement.addEventListener('pointerup', (e)=>{
   activePointers = Math.max(0, activePointers - 1);
@@ -288,7 +295,7 @@ renderer.domElement.addEventListener('pointerup', (e)=>{
   handleTap(e.clientX, e.clientY);
 });
 renderer.domElement.addEventListener('pointercancel', ()=>{ activePointers = Math.max(0, activePointers - 1); cancelLongPress(); tapStart = null; });
-renderer.domElement.addEventListener('contextmenu', (e)=>{ e.preventDefault(); openActionRing(e.clientX, e.clientY); }); // desktop right-click
+renderer.domElement.addEventListener('contextmenu', (e)=>{ e.preventDefault(); openActionRing(e.clientX, e.clientY, pickAnyAt(e.clientX, e.clientY)); }); // desktop right-click (precise)
 
 // The spokes all converge on the center node, so a raycast near the middle tends to
 // grab a ray's inner stub instead of the center star. Claim a small screen radius
@@ -384,7 +391,7 @@ function pickAnyAt(clientX, clientY){
 const wikiUrl = (t)=> `https://en.wikipedia.org/wiki/${encodeURIComponent(t)}`;
 function setPath(field, title){ window.dispatchEvent(new CustomEvent('starwiki:setpath', { detail: { field, title } })); }
 
-function actionsForContext(clientX, clientY){
+function actionsForContext(obj){
   // Empty-space / map "command wheel"
   const commandWheel = {
     label: '',
@@ -396,7 +403,6 @@ function actionsForContext(clientX, clientY){
     ]
   };
   if (overviewActive) return commandWheel;
-  const obj = pickAnyAt(clientX, clientY);
   if (obj && obj.userData && obj.userData.kind === 'center'){
     return {
       label: currentTitle,
@@ -436,9 +442,9 @@ function ensureRingDom(){
   document.body.appendChild(ringEl);
 }
 
-function openActionRing(clientX, clientY){
+function openActionRing(clientX, clientY, target){
   if (isAnimating || !currentTitle) return;
-  const ctx = actionsForContext(clientX, clientY);
+  const ctx = actionsForContext(target);
   if (!ctx || !ctx.actions.length) return;
   ensureRingDom();
   ringEl.innerHTML = '';
