@@ -453,7 +453,10 @@ function openActionRing(clientX, clientY){
   ringBackdrop.style.display = 'block';
   ringEl.style.display = 'block';
   ringOpen = true;
-  controls.enabled = false; // freeze the view while the ring is up
+  // NOTE: don't toggle controls.enabled here — disabling TrackballControls mid-gesture
+  // makes its onPointerUp early-return and leak a "stuck" pointer, which then reads as
+  // phantom multi-touch (runaway pinch-zoom). The backdrop already blocks new gestures,
+  // and the idle drift is gated on !ringOpen, so the view stays put while the ring is up.
   // restart the bloom-in animation
   ringEl.classList.remove('show'); void ringEl.offsetWidth; ringEl.classList.add('show');
 }
@@ -463,7 +466,6 @@ function closeActionRing(){
   ringOpen = false;
   if (ringEl){ ringEl.style.display = 'none'; ringEl.classList.remove('show'); }
   if (ringBackdrop) ringBackdrop.style.display = 'none';
-  controls.enabled = true;
 }
 document.addEventListener('keydown', (e)=>{ if (e.key === 'Escape' && ringOpen) closeActionRing(); });
 
@@ -2578,8 +2580,8 @@ function fadeInGroups(){
 
 function animate(){
   requestAnimationFrame(animate);
-  // Drift the camera slowly when idle (not mid-travel, no preview/overview open, motion allowed).
-  if (!REDUCED && !isAnimating && !previewTarget && !overviewActive && (performance.now() - lastInteraction > IDLE_MS)){
+  // Drift the camera slowly when idle (not mid-travel, no preview/overview/ring open, motion allowed).
+  if (!REDUCED && !isAnimating && !previewTarget && !overviewActive && !ringOpen && (performance.now() - lastInteraction > IDLE_MS)){
     const off = camera.position.clone().sub(controls.target);
     off.applyAxisAngle(IDLE_AXIS, 0.0006);
     camera.position.copy(controls.target).add(off);
