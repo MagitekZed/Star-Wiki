@@ -102,7 +102,9 @@ if (sheetHandle && infoEl) {
   const nearest = (h) => snaps().reduce((a,b)=> Math.abs(b-h) < Math.abs(a-h) ? b : a);
   const applyHeight = (h)=>{
     infoEl.style.setProperty('--sheet-h', h + 'px');
-    document.body.classList.toggle('sheet-collapsed', h <= COLLAPSED + 4);
+    const collapsed = h <= COLLAPSED + 4;
+    document.body.classList.toggle('sheet-collapsed', collapsed);
+    if (collapsed) infoEl.scrollTop = 0; // show the handle/title, not mid-scroll content
   };
 
   let dragging = false, startY = 0, startH = 0, moved = 0;

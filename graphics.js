@@ -233,13 +233,36 @@ let peekedObject = null;       // touch: the spoke revealed by the previous tap 
 let lastPointerWasTouch = false;
 
 container.addEventListener('mousemove', (e)=>{
+  if (isTouchDragging()) return;            // ignore synthetic moves while orbiting on touch
   const rect = renderer.domElement.getBoundingClientRect();
   mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
   mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
   mousePx.x = e.clientX - rect.left;
   mousePx.y = e.clientY - rect.top;
 });
-renderer.domElement.addEventListener('pointerdown', (e)=>{ lastPointerWasTouch = (e.pointerType === 'touch' || e.pointerType === 'pen'); }, true);
+
+// --- Tap vs drag detection: pointer-based so a tap tolerates small wobble (we don't
+// rely on the flaky synthetic 'click' on touch). Also lays the groundwork for the
+// long-press action ring (a held pointer is excluded from tap handling). ---
+let tapStart = null;       // { x, y, t, moved } for the active single-pointer gesture
+let activePointers = 0;
+function isTouchDragging(){ return lastPointerWasTouch && !!(tapStart && tapStart.moved); }
+renderer.domElement.addEventListener('pointerdown', (e)=>{
+  activePointers++;
+  lastPointerWasTouch = (e.pointerType === 'touch' || e.pointerType === 'pen');
+  if (activePointers === 1) tapStart = { x: e.clientX, y: e.clientY, t: performance.now(), moved: false };
+  else if (tapStart) tapStart.moved = true; // a second finger (pinch) cancels the tap
+});
+renderer.domElement.addEventListener('pointermove', (e)=>{
+  if (tapStart && !tapStart.moved && Math.hypot(e.clientX - tapStart.x, e.clientY - tapStart.y) > 10) tapStart.moved = true;
+});
+renderer.domElement.addEventListener('pointerup', (e)=>{
+  activePointers = Math.max(0, activePointers - 1);
+  const ts = tapStart; tapStart = null;
+  if (!ts || ts.moved || performance.now() - ts.t > 600) return; // moved → drag; held → (future) long-press
+  handleTap(e.clientX, e.clientY);
+});
+renderer.domElement.addEventListener('pointercancel', ()=>{ activePointers = Math.max(0, activePointers - 1); tapStart = null; });
 
 // Pick the spoke/star under a screen coord. Used by tap handling so selection
 // never depends on the RAF-driven hover state (which is stale at click time on touch).
@@ -263,23 +286,23 @@ function confirmTarget(obj, x, y){
   else openPreview(toTitle, x, y);
 }
 
-container.addEventListener('click', (e)=>{
-  if (isAnimating) return; // ignore clicks during animation
-  if (overviewActive) { closeMapNodePopup(); return; } // clicking the void dismisses a node popup
+function handleTap(clientX, clientY){
+  if (isAnimating) return; // ignore taps during animation
+  if (overviewActive) { closeMapNodePopup(); return; } // tapping the void dismisses a node popup
   // Anchor hover to the tap point so the title tooltip shows where the finger landed.
   const rect = renderer.domElement.getBoundingClientRect();
-  mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-  mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-  mousePx.x = e.clientX - rect.left;
-  mousePx.y = e.clientY - rect.top;
+  mouse.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+  mouse.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+  mousePx.x = clientX - rect.left;
+  mousePx.y = clientY - rect.top;
 
-  const obj = pickObjectAt(e.clientX, e.clientY);
+  const obj = pickObjectAt(clientX, clientY);
   if (lastPointerWasTouch) {
     // Two-step: first tap peeks the name; tapping the SAME spoke again confirms.
     // Tapping a different spoke peeks that one; tapping empty space dismisses.
     if (obj && obj === peekedObject) {
       peekedObject = null;
-      confirmTarget(obj, e.clientX, e.clientY);
+      confirmTarget(obj, clientX, clientY);
     } else if (obj) {
       peekedObject = obj;
     } else {
@@ -288,10 +311,10 @@ container.addEventListener('click', (e)=>{
     }
   } else {
     // Mouse: a single click travels (hover already revealed the title).
-    if (obj) confirmTarget(obj, e.clientX, e.clientY);
+    if (obj) confirmTarget(obj, clientX, clientY);
     else if (previewTarget) closePreview();
   }
-});
+}
 
 // Tell the sheet (on mobile) to collapse so a freshly-drawn cluster is visible.
 function notifyNavigate(){
@@ -1237,7 +1260,18 @@ function overviewCameraFit(){
   const sphere = box.getBoundingSphere(new THREE.Sphere());
   const r = Math.max(sphere.radius, 25);
   const fov = camera.fov * Math.PI / 180;
-  const dist = (r / Math.sin(fov / 2)) * 1.1;
+  let dist = (r / Math.sin(fov / 2)) * 1.1;
+  // On mobile the toolbar/breadcrumbs (top) and the peek sheet + footer (bottom) cover
+  // part of the canvas — pull back so the constellation fits the visible band, not the
+  // whole screen (the view offset then centres it within that band).
+  if (window.innerWidth <= 720){
+    const h = container.clientHeight || window.innerHeight;
+    const bc = document.getElementById('breadcrumbs');
+    const topInset = bc ? bc.getBoundingClientRect().bottom : 0;
+    const bottomInset = 88 + 26; // peek sheet + footer (sync with --sheet-collapsed-h/--footer-h)
+    const band = Math.max(140, h - topInset - bottomInset);
+    dist *= h / band;
+  }
   const dir = camera.position.clone().sub(controls.target);
   if (dir.lengthSq() < 1e-6) dir.set(0, 0.35, 1);
   dir.normalize();
@@ -1294,6 +1328,7 @@ function transitionIntoOverview(){
   if (overviewTransitioning || overviewActive || isAnimating) return;
   overviewActive = true;
   overviewTransitioning = true;
+  notifyNavigate(); // collapse the mobile sheet so the map isn't hidden behind it
   closePreview();
   hideTypeLegend(); // the map's own legend takes over while in overview
   document.getElementById('mapBtn')?.classList.add('active');
@@ -1584,7 +1619,7 @@ let sidebarToken = 0; // bumped each render so async facts can detect a stale si
 function updateSidebar(center, neighbors, chainPrev, metaByTitle = {}){
   const token = ++sidebarToken;
   const info = document.getElementById('info');
-  if (info) info.classList.remove('empty'); // leave the first-run welcome state
+  if (info){ info.classList.remove('empty'); info.scrollTop = 0; } // new page: leave welcome state, scroll to top
   const heading = document.getElementById('currentWord');
   heading.textContent = center.title;
 
@@ -2003,6 +2038,8 @@ function schedulePrefetch(title){
 }
 
 function updateHover(){
+  // While orbiting on touch, don't flash tooltips for spokes passing under the finger.
+  if (isTouchDragging()){ if (hovered) resetHovered(); hovered = null; tooltip.classList.remove('show'); return; }
   raycaster.setFromCamera(mouse, camera);
   const intersects = raycaster.intersectObjects([...edgeGroup.children, ...starGroup.children], false);
   if (intersects.length > 0) {
