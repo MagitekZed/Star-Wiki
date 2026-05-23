@@ -33,8 +33,14 @@
       <symbol id="ic-link" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 14.5 14.5 9.5"/><path d="M11 6.8 12.8 5a3.4 3.4 0 0 1 4.8 4.8l-1.8 1.8"/><path d="M13 17.2 11.2 19a3.4 3.4 0 0 1-4.8-4.8l1.8-1.8"/></symbol>
       <symbol id="ic-camera" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h2.5L8 6h8l1.5 2H20a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.3"/></symbol>
       <symbol id="ic-save" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v11"/><path d="m7.5 10 4.5 4.5L16.5 10"/><path d="M5 20h14"/></symbol>
+      <symbol id="ic-map" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 7l6 3 4-4 4 6"/><path d="M11 10l-2 8"/><circle cx="5" cy="7" r="1.5" fill="currentColor" stroke="none"/><circle cx="11" cy="10" r="1.5" fill="currentColor" stroke="none"/><circle cx="15" cy="6" r="1.5" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.5" fill="currentColor" stroke="none"/><circle cx="9" cy="18" r="1.5" fill="currentColor" stroke="none"/></symbol>
+      <symbol id="ic-restart" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 2.6-6.3"/><path d="M3 4v4h4"/></symbol>
     </svg>
     <div id="canvas"></div>
+    <div id="overviewLabels" class="overview-labels hidden" aria-hidden="true"></div>
+    <div id="mapLegend" class="map-legend hidden" aria-hidden="true"></div>
+    <div id="typeLegend" class="type-legend hidden" aria-hidden="true"></div>
+    <div id="mapNodePopup" class="map-popup hidden" role="dialog" aria-label="Article details"></div>
     <div id="progress" class="progress" aria-hidden="true"></div>
     <header>
       <h1 class="brand">
@@ -50,6 +56,7 @@
         </div>
         <button id="randomBtn" class="icon-btn" data-tip="Surprise me" aria-label="Surprise me — random article"><svg class="icon"><use href="#ic-surprise"/></svg></button>
         <button id="pathBtn" class="icon-btn" data-tip="Find path" aria-label="Find a path between two articles"><svg class="icon"><use href="#ic-route"/></svg></button>
+        <button id="mapBtn" class="icon-btn" data-tip="Galaxy map" aria-label="Toggle galaxy overview map"><svg class="icon"><use href="#ic-map"/></svg></button>
         <div class="menu">
           <button id="viewBtn" class="icon-btn" data-tip="View options" aria-label="View options"><svg class="icon"><use href="#ic-settings"/></svg></button>
           <div id="viewPanel" class="menu-panel hidden">
@@ -58,9 +65,19 @@
               <span class="info-icon"><svg class="icon"><use href="#ic-info"/></svg><span class="info-text">Show pages that link back to the current page.</span></span>
             </label>
             <label class="toggle"><input type="checkbox" id="trailToggle" checked /> Trail</label>
+            <label class="toggle"><input type="checkbox" id="crossToggle" /> Cross-links
+              <span class="info-icon"><svg class="icon"><use href="#ic-info"/></svg><span class="info-text">Show faint links between neighbours that also link to each other.</span></span>
+            </label>
+            <div class="menu-sep"></div>
+            <div class="menu-label">Star size</div>
+            <select id="sizeSelect" class="menu-select" aria-label="Scale stars by metric">
+              <option value="uniform">Uniform</option>
+              <option value="length">Article length</option>
+            </select>
           </div>
         </div>
-        <button id="resetCam" class="icon-btn" data-tip="Reset camera" aria-label="Reset camera"><svg class="icon"><use href="#ic-home"/></svg></button>
+        <button id="resetCam" class="icon-btn" data-tip="Recenter view" aria-label="Recenter the camera on the current star"><svg class="icon"><use href="#ic-home"/></svg></button>
+        <button id="resetBtn" class="icon-btn" data-tip="Start over" aria-label="Start over — back to the welcome screen"><svg class="icon"><use href="#ic-restart"/></svg></button>
         <div class="menu">
           <button id="moreBtn" class="icon-btn" data-tip="More" aria-label="More actions"><svg class="icon"><use href="#ic-more"/></svg></button>
           <div id="morePanel" class="menu-panel hidden">
@@ -114,9 +131,32 @@
       <div class="help-box">
         <button id="helpClose" class="close" aria-label="Close help"><svg class="icon"><use href="#ic-close"/></svg></button>
         <h2>How it works</h2>
-        <p>Use the search box to find a page and press <strong>Search</strong> to explore it.</p>
-        <p>Toggle <strong>Backlinks</strong> to include pages that link back to the current page.</p>
-        <p>Click stars to travel between pages. Scroll to zoom and drag to orbit. Use the house button to reset the camera.</p>
+        <p>Every Wikipedia article is a glowing <strong>star</strong>; its most related links orbit around it as smaller stars, joined by <strong>rays</strong>. Fall down the rabbit hole one link at a time.</p>
+
+        <h3>Getting around the galaxy</h3>
+        <ul class="help-list">
+          <li><strong>Drag</strong> to orbit, <strong>scroll</strong> to zoom. Leave it alone and the view drifts gently on its own.</li>
+          <li><strong>Hover</strong> a ray or star to see its title; <strong>click</strong> it for a quick preview, then click the preview to travel there.</li>
+          <li>The <strong>pink ray</strong> always leads back to the page you came from.</li>
+          <li><strong>← / →</strong> arrow keys step back and forward through your trail; the <strong>breadcrumbs</strong> up top jump to any stop.</li>
+        </ul>
+
+        <h3>Reading the map</h3>
+        <ul class="help-list">
+          <li><strong>Faint violet web</strong> — “cross-links”: connections <em>between</em> the orbiting links, showing how a topic’s neighbours relate to each other.</li>
+          <li>The <strong>glowing trail</strong> marks the path you’ve travelled. Visited stars look dimmer.</li>
+        </ul>
+
+        <h3>Toolbar</h3>
+        <ul class="help-list">
+          <li><strong>Search</strong> — jump to any article.</li>
+          <li><svg class="help-ic"><use href="#ic-surprise"/></svg><strong>Surprise me</strong> — a random article to start from.</li>
+          <li><svg class="help-ic"><use href="#ic-route"/></svg><strong>Find path</strong> — discover a chain of links between two articles, then fly the route.</li>
+          <li><svg class="help-ic"><use href="#ic-map"/></svg><strong>Galaxy map</strong> — zoom out to see your whole journey as a constellation; click any node to fly there.</li>
+          <li><svg class="help-ic"><use href="#ic-settings"/></svg><strong>View options</strong> — toggle <strong>Backlinks</strong> (pages that link <em>to</em> this one), the <strong>Trail</strong>, the <strong>Cross-links</strong>, and scale stars by <strong>article length</strong>.</li>
+          <li><svg class="help-ic"><use href="#ic-home"/></svg><strong>Recenter view</strong> and <svg class="help-ic"><use href="#ic-restart"/></svg><strong>Start over</strong> (back to this welcome screen).</li>
+          <li><svg class="help-ic"><use href="#ic-more"/></svg><strong>More</strong> — copy a shareable link to your journey, download a snapshot, or save journeys to revisit later.</li>
+        </ul>
       </div>
     </div>
 
@@ -124,7 +164,7 @@
       <div class="path-box">
         <button id="pathClose" class="close" aria-label="Close"><svg class="icon"><use href="#ic-close"/></svg></button>
         <h2>Find a path</h2>
-        <p class="path-help">Discover a chain of links from one article to another (up to 2 hops), then fly the route.</p>
+        <p class="path-help">Discover a chain of links from one article to another (up to 3 links), then fly the route.</p>
         <label class="path-field"><span>From</span><input id="pathFrom" type="text" placeholder="e.g., Octopus" /></label>
         <label class="path-field"><span>To</span><input id="pathTo" type="text" placeholder="e.g., Jazz" /></label>
         <div class="path-actions"><button id="pathFind">Find path</button></div>

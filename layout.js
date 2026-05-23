@@ -3,7 +3,12 @@ import {
   onGo,
   setShowBacklinks,
   setTrailMode,
+  setStarSizeMode,
+  setShowCrossLinks,
+  toggleOverview,
+  isOverviewActive,
   centerCameraOnCurrent,
+  resetToWelcome,
   goBackOne,
   goForwardOne,
   queueNav,
@@ -48,6 +53,13 @@ document.getElementById('backToggle').addEventListener('change', (e)=>{
 document.getElementById('trailToggle').addEventListener('change', (e)=>{
   setTrailMode(e.target.checked);
 });
+document.getElementById('crossToggle')?.addEventListener('change', (e)=>{
+  setShowCrossLinks(e.target.checked);
+});
+document.getElementById('sizeSelect')?.addEventListener('change', (e)=>{
+  setStarSizeMode(e.target.value);
+});
+document.getElementById('mapBtn')?.addEventListener('click', ()=> toggleOverview());
 
 const randomBtn = document.getElementById('randomBtn');
 if (randomBtn) randomBtn.addEventListener('click', async ()=>{
@@ -121,7 +133,7 @@ async function runPathFind(){
   } else if (result.status === 'invalid') {
     pathStatus.innerHTML = `<span class="path-miss">Couldn't find one of those articles. Check the spelling.</span>`;
   } else {
-    pathStatus.innerHTML = `<span class="path-miss">No path found within 2 links. They may be far apart — try a broader endpoint.</span>`;
+    pathStatus.innerHTML = `<span class="path-miss">No path found within 3 links. They may be far apart — try a broader endpoint.</span>`;
   }
 }
 
@@ -258,6 +270,7 @@ document.addEventListener('click', (e)=>{
 });
 
 document.getElementById('resetCam').addEventListener('click', centerCameraOnCurrent);
+document.getElementById('resetBtn')?.addEventListener('click', resetToWelcome);
 
 const helpModal = document.getElementById('helpModal');
 document.getElementById('helpBtn').addEventListener('click', ()=>{
@@ -268,6 +281,10 @@ document.getElementById('helpClose').addEventListener('click', ()=>{
 });
 helpModal.addEventListener('click', (e)=>{
   if(e.target === helpModal) helpModal.classList.add('hidden');
+});
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && isOverviewActive()) { toggleOverview(false); }
 });
 
 document.addEventListener('keydown', e => {

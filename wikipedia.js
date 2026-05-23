@@ -59,7 +59,7 @@ async function wikiFetch(url){
   const wait = Math.max(0, lastFetch + FETCH_DELAY - now);
   if (wait) await new Promise(r=>setTimeout(r, wait));
   lastFetch = Date.now();
-  return fetch(url, { headers: { 'Api-User-Agent': 'StarWiki/1.0 (https://example.com)' } });
+  return fetch(url, { headers: { 'Api-User-Agent': 'StarWiki/1.0 (https://github.com/MagitekZed/Star-Wiki)' } });
 }
 
 async function fetchSummary(title){
@@ -322,10 +322,35 @@ async function fetchOutgoingLinks(title, cap = 500){
   return out.slice(0, cap);
 }
 
+// Pages that link TO `title` (its backlinks), capped. Used as the backward
+// frontier for the 3-hop "meet in the middle" search.
+async function fetchBacklinks(title, cap = 300){
+  const out = [];
+  const seen = new Set();
+  let cont = null;
+  do {
+    let url = `https://en.wikipedia.org/w/api.php?action=query&list=backlinks&bltitle=${encodeURIComponent(title)}&blnamespace=0&bllimit=max&format=json&origin=*`;
+    if (cont) url += `&blcontinue=${encodeURIComponent(cont)}`;
+    const res = await wikiFetch(url);
+    const data = await res.json();
+    if (data.query?.backlinks) {
+      for (const l of data.query.backlinks) {
+        if (!seen.has(l.title)) { seen.add(l.title); out.push(l.title); }
+      }
+    }
+    cont = data.continue?.blcontinue;
+  } while (cont && out.length < cap);
+  return out.slice(0, cap);
+}
+
 /**
- * Find a directed link path from -> to, up to 2 hops (path length <= 3 nodes).
- * Uses prop=links + pltitles to batch-check candidates, so a search is ~13
- * throttled requests. onProgress(msg) reports status. Returns:
+ * Find a directed link path from -> to, up to 3 hops (path length <= 4 nodes).
+ * Stages: 1 hop (to is directly linked), 2 hops (one of from's links points at
+ * to), then a bidirectional 3-hop "meet in the middle" — bridge from's forward
+ * links (L0) to to's backlinks (B) by checking for an edge a->b with a∈L0, b∈B,
+ * using prop=links + pltitles to batch the check. The 3-hop stage is bounded by a
+ * request budget (hub pages have huge backlink sets), so it is best-effort, not a
+ * guaranteed-shortest path. onProgress(msg) reports status. Returns:
  *   { status:'found', path:[...] } | { status:'notfound', from, to } | { status:'invalid' }
  */
 async function findPath(fromTitle, toTitle, onProgress = ()=>{}){
@@ -339,6 +364,7 @@ async function findPath(fromTitle, toTitle, onProgress = ()=>{}){
   if (!L0.length) return { status: 'notfound', from, to };
   if (L0.includes(to)) return { status: 'found', path: [from, to] };
 
+  // ----- 2 hops: from -> a -> to (a links directly to `to`) -----
   onProgress(`Checking ${L0.length} first-hop links…`);
   const chunks = chunkArray(L0, 50);
   let checked = 0;
@@ -354,6 +380,39 @@ async function findPath(fromTitle, toTitle, onProgress = ()=>{}){
     } catch {}
     checked += ch.length;
     onProgress(`Checked ${checked}/${L0.length} links…`);
+  }
+
+  // ----- 3 hops: from -> a -> b -> to (a∈L0, b links to `to`) -----
+  onProgress('No direct link — searching one level deeper…');
+  let B = [];
+  try { B = await fetchBacklinks(to, 250); } catch {}
+  B = B.filter(t => t !== from && t !== to);
+  if (B.length) {
+    const aChunks = chunkArray(L0.filter(t => t !== to).slice(0, 300), 50);
+    const bChunks = chunkArray(B, 50);
+    const MAX_REQ = 30; // hub pages would otherwise explode; bail gracefully
+    let req = 0;
+    for (const aCh of aChunks) {
+      for (const bCh of bChunks) {
+        if (req >= MAX_REQ) return { status: 'notfound', from, to };
+        req++;
+        onProgress(`Searching deeper… (${req})`);
+        try {
+          const url = `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(aCh.join('|'))}&prop=links&plnamespace=0&pllimit=max&pltitles=${encodeURIComponent(bCh.join('|'))}&format=json&origin=*`;
+          const res = await wikiFetch(url);
+          const data = await res.json();
+          const pages = data.query?.pages ? Object.values(data.query.pages) : [];
+          for (const p of pages) {
+            if (!p.links || !p.links.length) continue;
+            const a = p.title;
+            const b = p.links[0].title;
+            if (a !== from && a !== to && a !== b && b !== from && b !== to) {
+              return { status: 'found', path: [from, a, b, to] };
+            }
+          }
+        } catch {}
+      }
+    }
   }
   return { status: 'notfound', from, to };
 }
@@ -386,6 +445,85 @@ async function fetchDailyFeed(){
   }
 }
 
+/**
+ * Given a set of titles (e.g. the 20 neighbours of a page), return the directed
+ * links that exist *among them* as [from, to] pairs. One request: prop=links is
+ * restricted with pltitles to the same set, so each page only reports links that
+ * land back inside the cluster. Titles are canonical neighbour titles already.
+ */
+async function fetchCrossLinks(titles){
+  const set = (titles || []).slice(0, 50);
+  if (set.length < 2) return [];
+  const pairs = [];
+  try {
+    const joined = encodeURIComponent(set.join('|'));
+    const url = `https://en.wikipedia.org/w/api.php?action=query&format=json&origin=*&prop=links&pllimit=max&titles=${joined}&pltitles=${joined}`;
+    const res = await wikiFetch(url);
+    const data = await res.json();
+    const pages = data.query?.pages ? Object.values(data.query.pages) : [];
+    for (const p of pages) {
+      if (!p || !p.title || !Array.isArray(p.links)) continue;
+      for (const l of p.links) {
+        if (l.title && l.title !== p.title) pairs.push([p.title, l.title]);
+      }
+    }
+  } catch {}
+  return pairs;
+}
+
+/**
+ * Resolve a list of article titles to their Wikidata entity ids in one batched
+ * request (so galaxy-map typing doesn't depend on ids captured during page load,
+ * which can be lost to a rate-limited request). Returns Map(title -> qid).
+ */
+async function fetchWikidataIds(titles){
+  const map = new Map();
+  const chunks = chunkArray((titles || []).slice(0, 200), 50);
+  for (const ch of chunks) {
+    try {
+      const url = `https://en.wikipedia.org/w/api.php?action=query&format=json&origin=*&prop=pageprops&ppprop=wikibase_item&titles=${encodeURIComponent(ch.join('|'))}`;
+      const res = await wikiFetch(url);
+      const data = await res.json();
+      const pages = data.query?.pages ? Object.values(data.query.pages) : [];
+      for (const p of pages) {
+        const qid = p.pageprops?.wikibase_item;
+        if (p.title && qid) map.set(p.title, qid);
+      }
+    } catch {}
+  }
+  return map;
+}
+
+/**
+ * Batch-fetch the Wikidata "instance of" (P31) values for a list of entity ids.
+ * Returns Map(qid -> [p31 qids]). Used to colour galaxy-map nodes by type.
+ */
+async function fetchInstanceTypes(ids){
+  const result = new Map();
+  const unique = [...new Set((ids || []).filter(Boolean))];
+  if (!unique.length) return result;
+  const chunks = chunkArray(unique, 50);
+  for (const ch of chunks) {
+    try {
+      const url = `https://www.wikidata.org/w/api.php?action=wbgetentities&ids=${encodeURIComponent(ch.join('|'))}&props=claims&languages=en&format=json&origin=*`;
+      const res = await wikiFetch(url);
+      const data = await res.json();
+      for (const qid of ch) {
+        const claims = data.entities?.[qid]?.claims?.P31;
+        const out = [];
+        if (Array.isArray(claims)) {
+          for (const c of claims) {
+            const v = c.mainsnak?.datavalue?.value;
+            if (v && v.id) out.push(v.id);
+          }
+        }
+        result.set(qid, out);
+      }
+    } catch {}
+  }
+  return result;
+}
+
 async function getRandomTitle(){
   try {
     const url = `https://en.wikipedia.org/w/api.php?action=query&list=random&rnnamespace=0&rnlimit=1&format=json&origin=*`;
@@ -397,4 +535,4 @@ async function getRandomTitle(){
   }
 }
 
-export { wikiFetch, fetchSummary, getPageStar, getRandomTitle, fetchWikidataFacts, findPath, fetchDailyFeed, summaryCache, starCache, fetchPageMetaBatch };
+export { wikiFetch, fetchSummary, getPageStar, getRandomTitle, fetchWikidataFacts, findPath, fetchDailyFeed, fetchCrossLinks, fetchWikidataIds, fetchInstanceTypes, summaryCache, starCache, fetchPageMetaBatch };

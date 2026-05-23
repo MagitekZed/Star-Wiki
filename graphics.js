@@ -9,7 +9,7 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { Line2 } from 'three/addons/lines/Line2.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
-import { getPageStar, fetchSummary, fetchWikidataFacts, summaryCache, starCache } from "./wikipedia.js";
+import { getPageStar, fetchSummary, fetchWikidataFacts, fetchCrossLinks, fetchWikidataIds, fetchInstanceTypes, summaryCache, starCache } from "./wikipedia.js";
 
 // ====== Scene setup ======
 const container = document.getElementById('canvas');
@@ -68,6 +68,27 @@ composer.addPass(vignettePass);
 composer.addPass(new OutputPass());
 // Reallocate the render targets at the correct size now that MSAA is enabled.
 composer.setSize(container.clientWidth, container.clientHeight);
+
+// Cross-links live on their own render layer so the bloom composer (camera layer 0)
+// never sees them — otherwise they self-bloom into bright beams near the core. After
+// the normal bloomed frame is composited, they're drawn in a plain overlay pass on
+// top: still correctly projected in 3D, but no bloom. Everything else glows as before.
+const CROSSLINK_LAYER = 1;
+function renderScene(){
+  composer.render();
+  if (crossLinkLines.length || overviewInterlinkLines.length){
+    const prevAutoClear = renderer.autoClear;
+    const prevBg = scene.background;
+    renderer.autoClear = false;     // don't wipe the composited frame
+    scene.background = null;         // and don't repaint the backdrop over it
+    renderer.setRenderTarget(null);
+    camera.layers.set(CROSSLINK_LAYER); // render only cross-links, on top, no bloom
+    renderer.render(scene, camera);
+    camera.layers.set(0);               // restore default for the next bloom pass
+    scene.background = prevBg;
+    renderer.autoClear = prevAutoClear;
+  }
+}
 
 // Resize handling
 window.addEventListener('resize', () => {
@@ -175,6 +196,27 @@ const trailLine = new Line2(trailGeometry, trailMaterial);
 trailLine.visible = false;
 scene.add(trailLine);
 
+// Template for the faint edges between neighbours that link to one another
+// (cross-links). Cloned per line so each owns its opacity — a single shared
+// material gets dimmed by the travel/ghost crossfade, which would otherwise make
+// freshly drawn cross-links inherit that dimming (bright on load, dim after a
+// hop). Deliberately NOT additive (additive stacked overlaps into a white glare)
+// and a dim desaturated violet so they read as secondary structure behind the
+// blue rays.
+const crossLinkMaterial = new LineMaterial({
+  color: 0x8a7cc8, linewidth: 0.9, transparent: true, opacity: 0.46,
+  blending: THREE.NormalBlending, depthWrite: false, depthTest: false
+});
+
+// The journey path drawn in galaxy-overview mode (spans the whole session).
+const overviewLineMaterial = new LineMaterial({
+  color: 0x9fb8ff, linewidth: 1.4, transparent: true, opacity: 0.55,
+  blending: THREE.AdditiveBlending, depthWrite: false
+});
+overviewLineMaterial.resolution.set(container.clientWidth, container.clientHeight);
+
+SHARED_MATERIALS.add(overviewLineMaterial);
+
 // ====== Interaction ======
 const raycaster = new THREE.Raycaster();
 raycaster.params.Line.threshold = 0.1;
@@ -194,6 +236,7 @@ container.addEventListener('mousemove', (e)=>{
 
 container.addEventListener('click', (e)=>{
   if (isAnimating) return; // ignore clicks during animation
+  if (overviewActive) { closeMapNodePopup(); return; } // clicking the void dismisses a node popup
   if (hovered && hovered.object && hovered.object.userData && hovered.object.userData.title && hovered.object.userData.kind !== 'center') {
     const toTitle = hovered.object.userData.title;
     const prev = getChainPrev();
@@ -293,6 +336,67 @@ const visited = new Set();
 let wordToMesh = new Map();
 let showBacklinks = false;
 let trailMode = true;
+let starSizeMode = 'uniform';   // 'uniform' | 'length'
+let showCrossLinks = false;
+
+// Cross-link edges among the current neighbours (live in edgeGroup).
+let crossLinkLines = [];
+let crossToken = 0;
+
+// Galaxy overview: every center's position for the whole session (never pruned
+// down to the ghost cap, so the full journey can be charted at once).
+const journeyPositions = new Map();
+const journeyMeta = new Map();      // title -> { wikidataId, length, categories }
+let overviewActive = false;
+let overviewGroup = null;
+let overviewLabelEls = [];
+let overviewHidden = [];
+let overviewTransitioning = false;
+let overviewFadeId = 0;
+// Galaxy-map enrichment (relations drive size + interlinks; Wikidata type drives colour).
+let overviewNodeSprites = new Map(); // title -> sprite
+let overviewInterlinkLines = [];     // faint links among journey nodes (layer 1, no bloom)
+let overviewRelations = new Map();   // title -> connection degree within the journey
+let overviewTypes = new Map();       // title -> type bucket key
+let overviewDataToken = 0;
+let overviewDataCache = { sig: null, pairs: null, degrees: null, types: null };
+let overviewEncodeRAF = 0;
+
+// Wikidata "instance of" (P31) QID -> type bucket. Curated; unknown -> 'concept'.
+const TYPE_BUCKETS = {
+  person:  { label: 'Person',       hue: 0xffd36e },
+  place:   { label: 'Place',        hue: 0x5ee0ff },
+  org:     { label: 'Organization', hue: 0xff9e57 },
+  event:   { label: 'Event',        hue: 0xf7768e },
+  work:    { label: 'Work',         hue: 0xc792ea },
+  species: { label: 'Species',      hue: 0x9ece6a },
+  concept: { label: 'Concept',      hue: 0x7aa2f7 }
+};
+const QID_BUCKET = {
+  Q5: 'person',
+  // places
+  Q515: 'place', Q6256: 'place', Q3624078: 'place', Q486972: 'place', Q82794: 'place',
+  Q23442: 'place', Q8502: 'place', Q4022: 'place', Q23397: 'place', Q165: 'place',
+  Q1549591: 'place', Q5119: 'place', Q35657: 'place', Q15284: 'place', Q34442: 'place',
+  Q12280: 'place', Q33837: 'place', Q75848: 'place',
+  // organizations
+  Q43229: 'org', Q4830453: 'org', Q891723: 'org', Q3918: 'org', Q327333: 'org',
+  Q7278: 'org', Q215380: 'org', Q476028: 'org', Q936518: 'org', Q163740: 'org',
+  Q31855: 'org', Q484652: 'org', Q748720: 'org',
+  // events
+  Q1190554: 'event', Q1656682: 'event', Q198: 'event', Q178561: 'event', Q132241: 'event',
+  Q13418847: 'event', Q18608583: 'event', Q1799072: 'event', Q40231: 'event',
+  // creative works
+  Q11424: 'work', Q7889: 'work', Q571: 'work', Q7366: 'work', Q482994: 'work',
+  Q2188189: 'work', Q47461344: 'work', Q838948: 'work', Q5398426: 'work', Q1107: 'work',
+  Q134556: 'work', Q105543609: 'work', Q386724: 'work', Q7725634: 'work',
+  // species / taxa
+  Q16521: 'species', Q7432: 'species', Q55983715: 'species', Q713623: 'species'
+};
+function bucketForQids(list){
+  for (const q of (list || [])) { if (QID_BUCKET[q]) return QID_BUCKET[q]; }
+  return 'concept';
+}
 
 const R_MIN = 8;
 const R_MAX = 40;
@@ -354,10 +458,21 @@ function opacityFromRank(rank, total){
   return 0.25 + (1 - t) * 0.75;
 }
 
+// Scale factor for a neighbour star from the active "Star size" metric. Length is
+// the page's byte size (already fetched in metaByTitle); mapped on a log scale so
+// stubs and mega-articles both stay in a sane visual range. 1 = no scaling.
+function metricMult(meta){
+  if (starSizeMode !== 'length' || !meta) return 1;
+  const len = meta.length;
+  if (!len || len <= 0) return 1;
+  const t = Math.min(1, Math.max(0, (Math.log10(len) - 3) / 2)); // 1KB→0, 100KB→1
+  return 0.7 + t * 1.1; // 0.7 .. 1.8
+}
+
 // ---- Bloom tween store for cluster expansion
 const _blooms = []; // { mesh, start, delayMs, target }
 
-function placeNeighbor(title, posArray, group = starGroup, map = wordToMesh){
+function placeNeighbor(title, posArray, group = starGroup, map = wordToMesh, meta = null){
   const isVisited = visited.has(title);
   const baseMat = isVisited
     ? materialVisited
@@ -365,8 +480,9 @@ function placeNeighbor(title, posArray, group = starGroup, map = wordToMesh){
   const mesh = new THREE.Sprite(baseMat.clone());
   mesh.position.set(posArray[0], posArray[1], posArray[2]);
   const th = seededHash(title);
-  // Visited stars read as smaller + dimmer ("been there").
-  const baseScale = isVisited ? 0.8 : 1.2;
+  // Visited stars read as smaller + dimmer ("been there"); the size metric (if
+  // any) then scales that base.
+  const baseScale = (isVisited ? 0.8 : 1.2) * metricMult(meta);
   mesh.userData = {
     title, kind: 'neighbor', baseScale,
     // Per-star twinkle so the cluster breathes organically instead of in lockstep.
@@ -390,12 +506,15 @@ function placeNeighbor(title, posArray, group = starGroup, map = wordToMesh){
 function drawRay(centerTitle, targetTitle, startVec3, endVec3, rank, total, group = edgeGroup, colorOverride=null){
   const lineOpacity = colorOverride ? 1 : opacityFromRank(rank, total);
   const baseColor = colorOverride || (showBacklinks ? 0xffd36e : 0x7aa2f7);
-  // Fat, screen-space-width line with a bright-at-hub -> dim-at-neighbor gradient.
+  // Fat, screen-space-width line. A midpoint vertex at 60% lets the hub colour hold
+  // for the first 60% of the shaft, then fade to the tip over the last 40% (so a
+  // type-coloured ray stays blue further toward the node).
+  const midVec = startVec3.clone().lerp(endVec3, 0.6);
   const geo = new LineGeometry();
-  geo.setPositions([startVec3.x, startVec3.y, startVec3.z, endVec3.x, endVec3.y, endVec3.z]);
+  geo.setPositions([startVec3.x, startVec3.y, startVec3.z, midVec.x, midVec.y, midVec.z, endVec3.x, endVec3.y, endVec3.z]);
   const cStart = new THREE.Color(baseColor);
   const cEnd = new THREE.Color(baseColor).multiplyScalar(0.3);
-  geo.setColors([cStart.r, cStart.g, cStart.b, cEnd.r, cEnd.g, cEnd.b]);
+  geo.setColors([cStart.r, cStart.g, cStart.b, cStart.r, cStart.g, cStart.b, cEnd.r, cEnd.g, cEnd.b]);
   const baseLinewidth = colorOverride ? 2.6 : 1.8;
   const baseLineOpacity = Math.min(1, lineOpacity + 0.15);
   const mat = new LineMaterial({
@@ -426,6 +545,7 @@ function drawRay(centerTitle, targetTitle, startVec3, endVec3, rank, total, grou
   dot.scale.set(0.7, 0.7, 1);
   dot.userData = {
     kind: 'rayDot',
+    target: targetTitle,
     start: startVec3.clone(),
     end: endVec3.clone(),
     speed: 0.22 + (seededHash(centerTitle + '→' + targetTitle) % 120) / 500,
@@ -466,9 +586,10 @@ function buildStarInto(centerTitle, data, gStar, gEdge, map, prevTitle=null, pre
   const neighbors = data.neighbors.slice(0,20);
   const filtered = prevTitle ? neighbors.filter(nb => nb !== prevTitle) : neighbors;
 
+  const meta = data.metaByTitle || {};
   filtered.forEach((nb, i) => {
     const pos = positionForNeighbor(nb, i, filtered.length);
-    placeNeighbor(nb, pos, gStar, map);
+    placeNeighbor(nb, pos, gStar, map, meta[nb]);
     drawRay(centerTitle, nb, new THREE.Vector3(0,0,0), new THREE.Vector3(pos[0], pos[1], pos[2]), i, filtered.length, gEdge);
   });
 
@@ -506,16 +627,33 @@ function rebuildStar(title, addToHistory=true){
     starGroup.visible = true; edgeGroup.visible = true;
     wordToMesh.clear();
     clusterGroups.clear(); centerPositions.clear(); ghostQueue.length = 0;
+    journeyPositions.clear();
+    journeyMeta.clear();
     trailLine.visible = false;
     buildStarInto(canonical, star, starGroup, edgeGroup, wordToMesh);
     clusterGroups.set(canonical, { star: starGroup, edge: edgeGroup });
     centerPositions.set(canonical, new THREE.Vector3(0,0,0));
+    recordJourneyPos(canonical, new THREE.Vector3(0,0,0));
+    journeyMeta.set(canonical, { wikidataId: star.center.wikidataId, length: star.center.length, categories: star.center.categories });
+    // Restored a multi-stop history (shared link / saved journey)? Lay the earlier
+    // stops out as a chain behind the current node, using the same incoming-vector
+    // rule as live travel, so the galaxy map is usable before any new navigation.
+    if (history.length > 1 && historyIndex === history.length - 1){
+      let p = new THREE.Vector3(0, 0, 0);
+      for (let i = history.length - 1; i > 0; i--){
+        const d = directionFromTitle(history[i]);
+        p = p.clone().sub(new THREE.Vector3(d[0], d[1], d[2]).normalize().multiplyScalar(SEGMENT_DIST));
+        recordJourneyPos(history[i - 1], p);
+      }
+    }
     currentTitle = canonical;
     controls.target.copy(new THREE.Vector3(0,0,0));
     fadeInGroups();
     visited.add(canonical);
     updateBreadcrumbs();
     updateTrail();
+    ensureCrossLinks(canonical);
+    applyNeighborTypes(canonical);
     isAnimating = false;
   }).catch(err => {
     console.error(err);
@@ -565,13 +703,677 @@ async function refreshCurrentNeighbors(){
   clusterGroups.set(currentTitle, { star: starGroup, edge: edgeGroup });
   hovered = null;
   tooltip.classList.remove('show');
+  ensureCrossLinks(currentTitle);
+  applyNeighborTypes(currentTitle);
   renderOnce();
 }
+
+// ====== Cross-links among neighbours ======
+function clearCrossLinks(){
+  crossLinkLines.forEach(line => {
+    if (line.parent) line.parent.remove(line);
+    if (line.geometry && line.geometry.dispose) line.geometry.dispose();
+    if (line.material && line.material.dispose && !SHARED_MATERIALS.has(line.material)) line.material.dispose();
+  });
+  crossLinkLines = [];
+}
+
+function drawCrossLinks(pairs){
+  const seen = new Set();
+  for (const [a, b] of pairs){
+    if (crossLinkLines.length >= 80) break;
+    const ma = wordToMesh.get(a), mb = wordToMesh.get(b);
+    if (!ma || !mb) continue;
+    const key = a < b ? a + ' ' + b : b + ' ' + a; // undirected dedupe
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const pa = ma.position, pb = mb.position;
+    const geo = new LineGeometry();
+    geo.setPositions([pa.x, pa.y, pa.z, pb.x, pb.y, pb.z]);
+    // Own material clone so the cluster crossfade can't permanently dim it.
+    const mat = crossLinkMaterial.clone();
+    mat.resolution.set(container.clientWidth, container.clientHeight);
+    const line = new Line2(geo, mat);
+    line.userData = { kind: 'crosslink' };
+    line.raycast = () => {}; // decorative — never intercept hover/click
+    line.layers.set(CROSSLINK_LAYER); // excluded from the bloom pass; drawn as an overlay
+    edgeGroup.add(line);
+    crossLinkLines.push(line);
+  }
+  renderOnce();
+}
+
+// (Re)compute cross-links for the active cluster. Best-effort + token-guarded so
+// a result that arrives after the user has moved on is discarded.
+function ensureCrossLinks(centerTitle){
+  clearCrossLinks();
+  const myToken = ++crossToken;
+  if (!showCrossLinks || !centerTitle || overviewActive) return;
+  const titles = [];
+  wordToMesh.forEach((mesh, t) => { if (mesh.userData && mesh.userData.kind === 'neighbor') titles.push(t); });
+  if (titles.length < 2) return;
+  fetchCrossLinks(titles).then(pairs => {
+    if (myToken !== crossToken || currentTitle !== centerTitle || isAnimating || overviewActive || !showCrossLinks) return;
+    drawCrossLinks(pairs);
+  }).catch(()=>{});
+}
+
+// ====== Neighbour colour-by-type (mirrors the galaxy map's node colouring) ======
+const neighborTypeCache = new Map(); // title -> bucket key (session-wide; types don't change)
+let neighborTypeToken = 0;
+
+function applyTypeColorsToMeshes(titles){
+  titles.forEach(t => {
+    const bucket = neighborTypeCache.get(t);
+    if (!bucket) return;
+    const mesh = wordToMesh.get(t);
+    if (!mesh || !mesh.userData || mesh.userData.kind !== 'neighbor') return;
+    const hue = TYPE_BUCKETS[bucket].hue;
+    mesh.userData.typeHue = hue;
+    // Visited stays grey ("been there"); a hovered star keeps its hover tint.
+    if (!visited.has(t) && (!hovered || hovered.object !== mesh)){
+      mesh.material.color.setHex(hue);
+      mesh.userData.baseColorHex = hue;
+    }
+  });
+  recolorRaysByType();
+}
+
+// Cluster-view legend: a collapsed chip (bottom-left) listing the link-type colours
+// present on the current page; expands on hover. Hidden in map mode (the map's own
+// legend takes over) and on the blank welcome screen.
+function renderTypeLegend(){
+  const box = document.getElementById('typeLegend');
+  if (!box) return;
+  if (overviewActive || !currentTitle){ box.classList.add('hidden'); box.style.opacity = ''; box.innerHTML = ''; return; }
+  const present = new Set();
+  wordToMesh.forEach((m, t) => { if (m.userData && m.userData.kind === 'neighbor'){ const b = neighborTypeCache.get(t); if (b) present.add(b); } });
+  if (!present.size){ box.classList.add('hidden'); box.style.opacity = ''; box.innerHTML = ''; return; }
+  const order = ['person','place','org','event','work','species','concept'];
+  const buckets = order.filter(b => present.has(b));
+  const hex = b => new THREE.Color(TYPE_BUCKETS[b].hue).getHexString();
+  const dots = buckets.map(b => `<i style="background:#${hex(b)}"></i>`).join('');
+  const rows = buckets.map(b => `<span class="tl-type"><i style="background:#${hex(b)}"></i>${TYPE_BUCKETS[b].label}</span>`).join('');
+  box.innerHTML =
+    `<div class="tl-head">${dots}<span class="tl-label">Node types</span></div>` +
+    `<div class="tl-body">${rows}</div>`;
+  box.classList.remove('hidden');
+  requestAnimationFrame(() => { box.style.opacity = '1'; });
+}
+function hideTypeLegend(){
+  const box = document.getElementById('typeLegend');
+  if (box){ box.classList.add('hidden'); box.style.opacity = ''; box.innerHTML = ''; }
+}
+
+// Repaint each ray's gradient: its hub colour (blue / gold) at the centre fading
+// to the target node's type colour at the tip. Comet dots take the type colour too.
+function recolorRaysByType(){
+  edgeGroup.children.forEach(obj => {
+    const ud = obj.userData;
+    if (!ud) return;
+    if (ud.kind === 'ray' && ud.title && ud.baseColorHex !== RETURN_COLOR){
+      const bucket = neighborTypeCache.get(ud.title);
+      if (!bucket || !obj.geometry || !obj.geometry.setColors) return;
+      const start = new THREE.Color(ud.baseColorHex);
+      const end = new THREE.Color(TYPE_BUCKETS[bucket].hue).multiplyScalar(0.85);
+      // 3 vertices: hub colour holds through the 60% midpoint, then fades to the tip.
+      obj.geometry.setColors([start.r, start.g, start.b, start.r, start.g, start.b, end.r, end.g, end.b]);
+    } else if (ud.kind === 'rayDot' && ud.target){
+      const bucket = neighborTypeCache.get(ud.target);
+      if (bucket) obj.material.color.setHex(TYPE_BUCKETS[bucket].hue);
+    }
+  });
+  renderTypeLegend();
+}
+
+// Colour the current cluster's neighbour stars by Wikidata type. Cached per title;
+// only the unknown ones cost a request (one id batch + one P31 batch). Token-guarded.
+async function applyNeighborTypes(centerTitle){
+  const myToken = ++neighborTypeToken;
+  const titles = [];
+  wordToMesh.forEach((m, t) => { if (m.userData && m.userData.kind === 'neighbor') titles.push(t); });
+  if (!titles.length) return;
+  applyTypeColorsToMeshes(titles); // paint anything already cached right away
+  const missing = titles.filter(t => !neighborTypeCache.has(t));
+  if (!missing.length) return;
+  try {
+    const idMap = await fetchWikidataIds(missing);
+    const ids = [...new Set([...idMap.values()])];
+    const p31 = await fetchInstanceTypes(ids);
+    if (myToken !== neighborTypeToken || currentTitle !== centerTitle) return; // moved on
+    missing.forEach(t => { const qid = idMap.get(t); neighborTypeCache.set(t, bucketForQids(qid ? p31.get(qid) : [])); });
+    applyTypeColorsToMeshes(missing);
+    renderOnce();
+  } catch {}
+}
+
+// ====== Star sizing ======
+function applyStarSizes(){
+  wordToMesh.forEach((mesh, title) => {
+    if (!mesh.userData || mesh.userData.kind !== 'neighbor') return;
+    const isVisited = visited.has(title);
+    const base = (isVisited ? 0.8 : 1.2) * metricMult(currentMeta[title]);
+    mesh.userData.baseScale = base;
+    mesh.scale.set(base, base, 1);
+  });
+  renderOnce();
+}
+
+// ====== Galaxy overview map ======
+function recordJourneyPos(title, vec){
+  if (!title || !vec) return;
+  journeyPositions.set(title, vec.clone());
+  if (journeyPositions.size > 250){
+    const first = journeyPositions.keys().next().value;
+    journeyPositions.delete(first);
+  }
+}
+
+function buildOverview(){
+  overviewGroup = new THREE.Group();
+  overviewNodeSprites = new Map();
+  overviewInterlinkLines = [];
+  journeyPositions.forEach((pos, title) => {
+    const isCur = title === currentTitle;
+    const mat = new THREE.SpriteMaterial({
+      map: starTexture, color: isCur ? 0xffffff : 0x8ea6e0,
+      transparent: true, blending: THREE.AdditiveBlending, depthWrite: false,
+      opacity: isCur ? 1 : 0.85
+    });
+    const s = new THREE.Sprite(mat);
+    s.position.copy(pos);
+    s.scale.setScalar(isCur ? 2.4 : 1.3);
+    s.userData = { kind: 'overviewNode', title, isCur, baseScale: isCur ? 2.4 : 1.3 };
+    overviewGroup.add(s);
+    overviewNodeSprites.set(title, s);
+  });
+  // Journey path through history order (skip consecutive repeats).
+  const pts = [];
+  let last = null;
+  history.forEach(t => { const p = journeyPositions.get(t); if (p && t !== last){ pts.push(p); last = t; } });
+  if (pts.length >= 2){
+    const arr = [];
+    pts.forEach(p => arr.push(p.x, p.y, p.z));
+    const geo = new LineGeometry();
+    geo.setPositions(arr);
+    overviewLineMaterial.resolution.set(container.clientWidth, container.clientHeight);
+    const line = new Line2(geo, overviewLineMaterial);
+    line.computeLineDistances();
+    line.raycast = () => {};
+    overviewGroup.add(line);
+  }
+  scene.add(overviewGroup);
+}
+
+function buildOverviewLabels(){
+  const box = document.getElementById('overviewLabels');
+  if (!box) return;
+  box.innerHTML = '';
+  box.classList.remove('hidden');
+  overviewLabelEls = [];
+  journeyPositions.forEach((pos, title) => {
+    const b = document.createElement('button');
+    b.className = 'overview-label' + (title === currentTitle ? ' current' : '');
+    b.textContent = title;
+    b.title = title;
+    b.dataset.title = title;
+    b.addEventListener('click', () => onOverviewLabelClick(title));
+    box.appendChild(b);
+    overviewLabelEls.push({ el: b, pos });
+  });
+}
+
+function updateOverviewLabels(){
+  if (!overviewActive || !overviewLabelEls.length) return;
+  const rect = renderer.domElement.getBoundingClientRect();
+  const v = new THREE.Vector3();
+  for (const { el, pos } of overviewLabelEls){
+    v.copy(pos).project(camera);
+    if (v.z > 1){ el.style.display = 'none'; continue; } // behind the camera
+    el.style.display = '';
+    el.style.left = (rect.left + (v.x * 0.5 + 0.5) * rect.width) + 'px';
+    el.style.top  = (rect.top  + (-v.y * 0.5 + 0.5) * rect.height) + 'px';
+  }
+}
+
+// ===== Galaxy-map enrichment: relations (size + interlinks) and type (colour) =====
+async function loadOverviewData(){
+  const myToken = ++overviewDataToken;
+  const titles = [...journeyPositions.keys()];
+  if (titles.length < 2) return;
+  const sig = titles.join('|');
+  let pairs, degrees, types;
+  if (overviewDataCache.sig === sig && overviewDataCache.degrees){
+    ({ pairs, degrees, types } = overviewDataCache);
+  } else {
+    pairs = [];
+    try { pairs = await fetchCrossLinks(titles); } catch {}
+    const titleSet = new Set(titles);
+    const adj = new Map();
+    for (const [a, b] of pairs){
+      if (a === b || !titleSet.has(a) || !titleSet.has(b)) continue;
+      if (!adj.has(a)) adj.set(a, new Set());
+      if (!adj.has(b)) adj.set(b, new Set());
+      adj.get(a).add(b); adj.get(b).add(a);
+    }
+    degrees = new Map();
+    titles.forEach(t => degrees.set(t, adj.has(t) ? adj.get(t).size : 0));
+    // Resolve Wikidata ids fresh (don't rely on ids captured during page load,
+    // which a rate-limited request can drop), then map their P31 to type buckets.
+    const idByTitle = new Map();
+    titles.forEach(t => { const m = journeyMeta.get(t); if (m && m.wikidataId) idByTitle.set(t, m.wikidataId); });
+    const missing = titles.filter(t => !idByTitle.has(t));
+    if (missing.length){
+      try {
+        const fetched = await fetchWikidataIds(missing);
+        fetched.forEach((qid, t) => idByTitle.set(t, qid));
+      } catch {}
+    }
+    const ids = [...new Set([...idByTitle.values()])];
+    let p31 = new Map();
+    try { p31 = await fetchInstanceTypes(ids); } catch {}
+    types = new Map();
+    titles.forEach(t => { const qid = idByTitle.get(t); types.set(t, bucketForQids(qid ? p31.get(qid) : [])); });
+    overviewDataCache = { sig, pairs, degrees, types };
+  }
+  if (myToken !== overviewDataToken || !overviewActive || !overviewGroup) return; // stale / closed
+  overviewRelations = degrees;
+  overviewTypes = types;
+  applyOverviewEncoding(degrees, types, pairs);
+}
+
+function buildOverviewInterlinks(pairs){
+  const seen = new Set();
+  const titleSet = new Set(overviewNodeSprites.keys());
+  let count = 0;
+  for (const [a, b] of (pairs || [])){
+    if (count >= 120) break;
+    if (a === b || !titleSet.has(a) || !titleSet.has(b)) continue;
+    const key = a < b ? a + ' ' + b : b + ' ' + a;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const pa = journeyPositions.get(a), pb = journeyPositions.get(b);
+    if (!pa || !pb) continue;
+    const geo = new LineGeometry();
+    geo.setPositions([pa.x, pa.y, pa.z, pb.x, pb.y, pb.z]);
+    const mat = crossLinkMaterial.clone();
+    mat.opacity = 0; // faded in by the encode tween
+    mat.resolution.set(container.clientWidth, container.clientHeight);
+    const line = new Line2(geo, mat);
+    line.userData = { kind: 'overviewInterlink', _ovTarget: 0.42 };
+    line.raycast = () => {};
+    line.layers.set(CROSSLINK_LAYER); // overlay pass, never blooms
+    overviewGroup.add(line);
+    overviewInterlinkLines.push(line);
+    count++;
+  }
+}
+
+function applyOverviewEncoding(degrees, types, pairs){
+  if (!overviewGroup) return;
+  buildOverviewInterlinks(pairs);
+
+  let maxDeg = 0;
+  degrees.forEach(d => { if (d > maxDeg) maxDeg = d; });
+  let hubTitle = null, hubDeg = -1;
+
+  const nodeSpecs = [];
+  overviewNodeSprites.forEach((sprite, title) => {
+    const deg = degrees.get(title) || 0;
+    if (deg > hubDeg){ hubDeg = deg; hubTitle = title; }
+    const isCur = sprite.userData.isCur;
+    // size by relation: 0 connections -> 1.0, the most-connected -> 3.0
+    const toScale = isCur ? 2.4 : (1.0 + (maxDeg > 0 ? deg / maxDeg : 0) * 2.0);
+    sprite.userData.baseScale = toScale;
+    const bucket = types.get(title) || 'concept';
+    const toColor = new THREE.Color(isCur ? 0xffffff : TYPE_BUCKETS[bucket].hue);
+    nodeSpecs.push({ sprite, fromScale: sprite.scale.x, toScale, fromColor: sprite.material.color.clone(), toColor });
+  });
+
+  // Tint each label's pill border by type (current node keeps its gradient pill).
+  overviewLabelEls.forEach(({ el }) => {
+    const title = el.dataset.title;
+    if (!title || title === currentTitle) return;
+    const bucket = types.get(title) || 'concept';
+    el.style.borderColor = '#' + new THREE.Color(TYPE_BUCKETS[bucket].hue).getHexString();
+  });
+
+  // A soft corona behind the hub (the most-connected node) so it reads as the centre of gravity.
+  let corona = null;
+  if (hubTitle && hubDeg > 0){
+    const hubSprite = overviewNodeSprites.get(hubTitle);
+    if (hubSprite){
+      const c = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: starTexture, color: 0xffeccf, transparent: true,
+        blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0
+      }));
+      c.position.copy(hubSprite.position);
+      c.scale.setScalar(hubSprite.userData.baseScale * 2.6);
+      c.raycast = () => {};
+      c.userData = { kind: 'overviewCorona' };
+      overviewGroup.add(c);
+      corona = { sprite: c, toOpacity: 0.3 };
+    }
+  }
+
+  tweenOverviewEncode(nodeSpecs, corona, overviewInterlinkLines.slice());
+  renderMapLegend(types);
+}
+
+function tweenOverviewEncode(nodeSpecs, corona, interlinks){
+  cancelAnimationFrame(overviewEncodeRAF);
+  const dur = REDUCED ? 0 : 480;
+  const t0 = performance.now();
+  const tmp = new THREE.Color();
+  function step(now){
+    const t = dur <= 0 ? 1 : Math.min(1, (now - t0) / dur);
+    const e = t < 0.5 ? 2*t*t : 1 - Math.pow(-2*t + 2, 2) / 2;
+    for (const s of nodeSpecs){
+      const sc = s.fromScale + (s.toScale - s.fromScale) * e;
+      s.sprite.scale.set(sc, sc, 1);
+      tmp.copy(s.fromColor).lerp(s.toColor, e);
+      s.sprite.material.color.copy(tmp);
+    }
+    if (corona) corona.sprite.material.opacity = corona.toOpacity * e;
+    for (const l of interlinks){ if (l.material) l.material.opacity = (l.userData._ovTarget || 0.42) * e; }
+    renderOnce();
+    if (t < 1) overviewEncodeRAF = requestAnimationFrame(step);
+  }
+  overviewEncodeRAF = requestAnimationFrame(step);
+}
+
+// ===== Map legend =====
+function renderMapLegend(types){
+  const box = document.getElementById('mapLegend');
+  if (!box) return;
+  const present = new Set();
+  types.forEach(b => present.add(b));
+  const order = ['person','place','org','event','work','species','concept'];
+  const swatches = order.filter(b => present.has(b)).map(b =>
+    `<span class="legend-type"><i style="background:#${new THREE.Color(TYPE_BUCKETS[b].hue).getHexString()}"></i>${TYPE_BUCKETS[b].label}</span>`
+  ).join('');
+  box.innerHTML =
+    `<div class="legend-row legend-size"><span class="legend-dot dot-sm"></span><span class="legend-dot dot-lg"></span> Bigger star = links to more of your stops</div>` +
+    (swatches ? `<div class="legend-row legend-types">${swatches}</div>` : '') +
+    `<div class="legend-row legend-lines"><span class="legend-line route"></span> Your route &nbsp; <span class="legend-line inter"></span> Links between articles</div>`;
+  box.classList.remove('hidden');
+  requestAnimationFrame(() => { box.style.opacity = '1'; });
+}
+function hideMapLegend(){
+  const box = document.getElementById('mapLegend');
+  if (!box) return;
+  box.style.opacity = '0';
+  box.classList.add('hidden');
+  box.innerHTML = '';
+}
+
+// ===== Map node popup (click a node to inspect, then travel) =====
+function closeMapNodePopup(){
+  const p = document.getElementById('mapNodePopup');
+  if (p){ p.classList.add('hidden'); p.innerHTML = ''; p.removeAttribute('data-title'); }
+}
+function openMapNodePopup(title){
+  const p = document.getElementById('mapNodePopup');
+  const sprite = overviewNodeSprites.get(title);
+  if (!p || !sprite) return;
+  const isCur = title === currentTitle;
+  const deg = overviewRelations.get(title) || 0;
+  const bucket = overviewTypes.get(title) || 'concept';
+  const meta = journeyMeta.get(title) || {};
+  const typeLabel = TYPE_BUCKETS[bucket].label;
+  const typeHex = '#' + new THREE.Color(TYPE_BUCKETS[bucket].hue).getHexString();
+  const lenKb = (typeof meta.length === 'number' && meta.length > 0) ? Math.round(meta.length / 1024) + ' KB' : null;
+  const connText = deg === 0 ? 'No links to your other stops'
+    : `Linked with ${deg} other article${deg > 1 ? 's' : ''} in your journey`;
+  const chips = Array.isArray(meta.categories)
+    ? meta.categories.slice(0, 3).map(c => `<span class="mp-chip">${escapeHtml(c)}</span>`).join('')
+    : '';
+  p.innerHTML =
+    `<button class="mp-close" aria-label="Close">&times;</button>` +
+    `<div class="mp-title">${escapeHtml(title)}</div>` +
+    `<div class="mp-type"><i style="background:${typeHex}"></i>${typeLabel}</div>` +
+    `<div class="mp-conn">${connText}${lenKb ? ` · ${lenKb}` : ''}</div>` +
+    (chips ? `<div class="mp-chips">${chips}</div>` : '') +
+    (isCur
+      ? `<div class="mp-here">You are here</div>`
+      : `<button class="mp-travel">Travel here <svg class="icon"><use href="#ic-star"/></svg></button>`);
+  p.dataset.title = title;
+  p.classList.remove('hidden');
+  // Position near the node's projected screen point.
+  const rect = renderer.domElement.getBoundingClientRect();
+  const v = sprite.position.clone().project(camera);
+  let x = rect.left + (v.x * 0.5 + 0.5) * rect.width;
+  let y = rect.top + (-v.y * 0.5 + 0.5) * rect.height;
+  const pr = p.getBoundingClientRect();
+  x = Math.min(Math.max(10, x + 14), window.innerWidth - pr.width - 10);
+  y = Math.min(Math.max(10, y + 14), window.innerHeight - pr.height - 10);
+  p.style.left = x + 'px';
+  p.style.top = y + 'px';
+  p.querySelector('.mp-close')?.addEventListener('click', closeMapNodePopup);
+  p.querySelector('.mp-travel')?.addEventListener('click', () => {
+    closeMapNodePopup();
+    const idx = history.lastIndexOf(title);
+    transitionOutOfOverview(() => { if (idx >= 0 && idx !== historyIndex) jumpToBreadcrumb(idx); });
+  });
+}
+
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+}
+
+function resetOverviewEnrichment(){
+  overviewDataToken++;            // invalidate any in-flight data load
+  cancelAnimationFrame(overviewEncodeRAF);
+  overviewNodeSprites = new Map();
+  overviewInterlinkLines = [];
+  overviewRelations = new Map();
+  overviewTypes = new Map();
+  closeMapNodePopup();
+  hideMapLegend();
+  renderTypeLegend(); // restore the cluster legend when leaving the map
+}
+
+// Camera framing that fits every journey node in view.
+function overviewCameraFit(){
+  const box = new THREE.Box3();
+  journeyPositions.forEach(p => box.expandByPoint(p));
+  const center = box.getCenter(new THREE.Vector3());
+  const sphere = box.getBoundingSphere(new THREE.Sphere());
+  const r = Math.max(sphere.radius, 25);
+  const fov = camera.fov * Math.PI / 180;
+  const dist = (r / Math.sin(fov / 2)) * 1.1;
+  const dir = camera.position.clone().sub(controls.target);
+  if (dir.lengthSq() < 1e-6) dir.set(0, 0.35, 1);
+  dir.normalize();
+  return { target: center, pos: center.clone().add(dir.multiplyScalar(dist)) };
+}
+
+// Standard close-up view centered on the current page's star.
+function currentNodeCameraView(){
+  const curPos = (centerPositions.get(currentTitle) || (starGroup && starGroup.position) || new THREE.Vector3()).clone();
+  return { target: curPos, pos: curPos.clone().add(DEFAULT_CAM_POS) };
+}
+
+// Every fadeable cluster object (stars, rays, cross-links, ghosts) + the trail.
+function clusterFadeables(){
+  const list = [];
+  clusterGroups.forEach(g => {
+    g.star.traverse(o => { if (o.material && 'opacity' in o.material) list.push(o); });
+    g.edge.traverse(o => { if (o.material && 'opacity' in o.material) list.push(o); });
+  });
+  if (trailLine.visible) list.push(trailLine);
+  return list;
+}
+
+// Instant teardown — used when another action (search/travel/load) takes over so
+// no half-finished transition is left behind.
+function teardownOverview(){
+  if (!overviewActive && !overviewGroup) return;
+  overviewFadeId++;            // cancel any running transition
+  overviewTransitioning = false;
+  overviewActive = false;
+  document.getElementById('mapBtn')?.classList.remove('active');
+  const box = document.getElementById('overviewLabels');
+  if (box){ box.innerHTML = ''; box.classList.add('hidden'); box.style.opacity = ''; }
+  overviewLabelEls = [];
+  if (overviewGroup){ disposeGroup(overviewGroup); scene.remove(overviewGroup); overviewGroup = null; }
+  resetOverviewEnrichment();
+  clusterGroups.forEach(g => {
+    [g.star, g.edge].forEach(grp => grp.traverse(o => {
+      if (o.userData && o.userData._ovBase != null){ o.material.opacity = o.userData._ovBase; delete o.userData._ovBase; }
+    }));
+  });
+  if (overviewHidden.length) overviewHidden.forEach(({ obj, vis }) => { obj.visible = vis; });
+  else clusterGroups.forEach(g => { g.star.visible = true; g.edge.visible = true; });
+  overviewHidden = [];
+  updateTrail();
+}
+
+// Zoom out to the whole galaxy while the spokes fade away.
+function transitionIntoOverview(){
+  if (journeyPositions.size < 2){
+    showToast('Travel between a few pages first to chart your galaxy.');
+    return;
+  }
+  if (overviewTransitioning || overviewActive || isAnimating) return;
+  overviewActive = true;
+  overviewTransitioning = true;
+  closePreview();
+  hideTypeLegend(); // the map's own legend takes over while in overview
+  document.getElementById('mapBtn')?.classList.add('active');
+  hovered = null;
+  tooltip.classList.remove('show');
+
+  // Build the constellation, starting fully transparent so it can fade in.
+  buildOverview();
+  const ovObjs = [];
+  overviewGroup.traverse(o => {
+    if (o.material && 'opacity' in o.material){ ovObjs.push(o); o.userData._ovTarget = o.material.opacity; o.material.opacity = 0; o.material.transparent = true; }
+  });
+  buildOverviewLabels();
+  const labelBox = document.getElementById('overviewLabels');
+  if (labelBox){ labelBox.style.opacity = '0'; requestAnimationFrame(() => { labelBox.style.opacity = '1'; }); }
+  // Fetch relations + types in the background; they "focus in" (resize/recolour +
+  // interlinks fade) once they land, roughly as the zoom-out settles.
+  loadOverviewData();
+
+  // Remember which clusters were visible so they return to their trail state.
+  overviewHidden = [];
+  clusterGroups.forEach(g => { overviewHidden.push({ obj: g.star, vis: g.star.visible }, { obj: g.edge, vis: g.edge.visible }); });
+  const live = clusterFadeables();
+  live.forEach(o => { o.userData._ovBase = o.material.opacity; o.material.transparent = true; });
+
+  const fit = overviewCameraFit();
+  const sT = controls.target.clone();
+  const sC = camera.position.clone();
+  const dur = REDUCED ? 0 : 1000;
+  const myId = ++overviewFadeId;
+
+  const finish = () => {
+    live.forEach(o => { if (o.userData._ovBase != null){ o.material.opacity = o.userData._ovBase; delete o.userData._ovBase; } });
+    clusterGroups.forEach(g => { g.star.visible = false; g.edge.visible = false; });
+    trailLine.visible = false;
+    ovObjs.forEach(o => { if (o.userData._ovTarget != null){ o.material.opacity = o.userData._ovTarget; delete o.userData._ovTarget; } });
+    overviewTransitioning = false;
+    renderOnce();
+  };
+
+  if (dur <= 0){ controls.target.copy(fit.target); camera.position.copy(fit.pos); controls.update(); finish(); return; }
+
+  const t0 = performance.now();
+  (function step(now){
+    if (myId !== overviewFadeId) return; // superseded / torn down
+    const t = Math.min(1, (now - t0) / dur);
+    const e = t < 0.5 ? 2*t*t : 1 - Math.pow(-2*t + 2, 2) / 2; // easeInOut quad
+    controls.target.copy(sT.clone().lerp(fit.target, e));
+    camera.position.copy(sC.clone().lerp(fit.pos, e));
+    controls.update();
+    live.forEach(o => { o.material.opacity = o.userData._ovBase * (1 - e); });
+    ovObjs.forEach(o => { o.material.opacity = o.userData._ovTarget * e; });
+    renderOnce();
+    if (t < 1) requestAnimationFrame(step); else finish();
+  })(performance.now());
+}
+
+// Zoom back in to the current node, fading the spokes back in. onDone fires once
+// settled on the current node (used to then travel to a clicked node).
+function transitionOutOfOverview(onDone){
+  if (!overviewActive){ if (onDone) onDone(); return; }
+  if (overviewTransitioning) return;
+  overviewTransitioning = true;
+  document.getElementById('mapBtn')?.classList.remove('active');
+
+  // Bring clusters back to their proper visibility, then fade them in from 0.
+  if (overviewHidden.length) overviewHidden.forEach(({ obj, vis }) => { obj.visible = vis; });
+  else clusterGroups.forEach(g => { g.star.visible = true; g.edge.visible = true; });
+  if (trailMode) trailLine.visible = true;
+  const live = clusterFadeables();
+  live.forEach(o => { o.userData._ovBase = (o.userData._ovBase != null ? o.userData._ovBase : o.material.opacity); o.material.opacity = 0; o.material.transparent = true; });
+
+  const ovObjs = [];
+  if (overviewGroup) overviewGroup.traverse(o => { if (o.material && 'opacity' in o.material){ ovObjs.push(o); o.userData._ovTarget = o.material.opacity; } });
+
+  const labelBox = document.getElementById('overviewLabels');
+  if (labelBox) labelBox.style.opacity = '0';
+
+  const view = currentNodeCameraView();
+  const sT = controls.target.clone();
+  const sC = camera.position.clone();
+  const dur = REDUCED ? 0 : 700;
+  const myId = ++overviewFadeId;
+
+  const finish = () => {
+    live.forEach(o => { if (o.userData._ovBase != null){ o.material.opacity = o.userData._ovBase; delete o.userData._ovBase; } });
+    if (overviewGroup){ disposeGroup(overviewGroup); scene.remove(overviewGroup); overviewGroup = null; }
+    if (labelBox){ labelBox.innerHTML = ''; labelBox.classList.add('hidden'); labelBox.style.opacity = ''; }
+    overviewLabelEls = [];
+    overviewHidden = [];
+    overviewActive = false;
+    overviewTransitioning = false;
+    resetOverviewEnrichment();
+    updateTrail();
+    renderOnce();
+    if (onDone) onDone();
+  };
+
+  if (dur <= 0){ controls.target.copy(view.target); camera.position.copy(view.pos); controls.update(); finish(); return; }
+
+  const t0 = performance.now();
+  (function step(now){
+    if (myId !== overviewFadeId) return;
+    const t = Math.min(1, (now - t0) / dur);
+    const e = t < 0.5 ? 2*t*t : 1 - Math.pow(-2*t + 2, 2) / 2;
+    controls.target.copy(sT.clone().lerp(view.target, e));
+    camera.position.copy(sC.clone().lerp(view.pos, e));
+    controls.update();
+    live.forEach(o => { o.material.opacity = o.userData._ovBase * e; });
+    ovObjs.forEach(o => { o.material.opacity = o.userData._ovTarget * (1 - e); });
+    renderOnce();
+    if (t < 1) requestAnimationFrame(step); else finish();
+  })(performance.now());
+}
+
+function toggleOverview(force){
+  const want = (typeof force === 'boolean') ? force : !overviewActive;
+  if (overviewTransitioning) return;
+  if (want === overviewActive) return;
+  if (want){ if (!isAnimating) transitionIntoOverview(); }
+  else transitionOutOfOverview();
+}
+
+function onOverviewLabelClick(title){
+  if (overviewTransitioning) return;
+  // Open the info popup; travelling happens from its "Travel here" button.
+  openMapNodePopup(title);
+}
+
+function isOverviewActive(){ return overviewActive; }
 
 // ====== Travel ======
 let isAnimating = false;
 async function travelToNeighbor(targetTitle, addToHistory=true){
-  if (isAnimating || !currentTitle) return;
+  if (isAnimating || overviewTransitioning || !currentTitle) return;
+  if (overviewActive) teardownOverview(); // any navigation leaves the overview
 
   // Resolve a provisional vector toward the target BEFORE fetch, if possible.
   const from = centerPositions.get(currentTitle) || new THREE.Vector3(0,0,0);
@@ -694,6 +1496,8 @@ async function travelToNeighbor(targetTitle, addToHistory=true){
       currentTitle = star.center.title;
       clusterGroups.set(currentTitle, { star: starGroup, edge: edgeGroup });
       centerPositions.set(currentTitle, to.clone());
+      recordJourneyPos(currentTitle, to);
+      journeyMeta.set(currentTitle, { wikidataId: star.center.wikidataId, length: star.center.length, categories: star.center.categories });
       updateTrail();
       trailLine.visible = trailMode;
       visited.add(currentTitle);
@@ -701,6 +1505,8 @@ async function travelToNeighbor(targetTitle, addToHistory=true){
       hovered = null;
       tooltip.classList.remove('show');
       isAnimating = false;
+      ensureCrossLinks(currentTitle);
+      applyNeighborTypes(currentTitle);
       flushQueuedActions(); // apply any queued toggle or nav
     }
   }
@@ -1108,6 +1914,9 @@ function resetHovered(){
       ? materialVisited
       : (showBacklinks ? materialBackNeighbor : materialNeighbor);
     obj.material = baseMat.clone();
+    // Re-apply the Wikidata-type colour (unvisited only; visited stays grey).
+    const hue = obj.userData.typeHue;
+    if (hue != null && !visited.has(obj.userData.title)) obj.material.color.setHex(hue);
     if (prevMat && !SHARED_MATERIALS.has(prevMat) && typeof prevMat.dispose === 'function') prevMat.dispose();
     if(obj.userData.baseScale) obj.scale.set(obj.userData.baseScale, obj.userData.baseScale, 1);
   } else if (obj.userData.normalMat) {
@@ -1154,6 +1963,9 @@ function updateHover(){
     if (obj.userData.kind === 'neighbor') {
       if (isNewHover) {
         obj.material = (showBacklinks ? materialBackNeighborHover : materialNeighborHover).clone();
+        // Hover = a brightened version of the star's type colour.
+        const hue = obj.userData.typeHue;
+        if (hue != null && !visited.has(obj.userData.title)) obj.material.color.copy(new THREE.Color(hue).lerp(new THREE.Color(0xffffff), 0.45));
         if(obj.userData.baseScale) obj.scale.set(obj.userData.baseScale * 1.25, obj.userData.baseScale * 1.25, 1);
       }
       const worldPos = obj.getWorldPosition(new THREE.Vector3());
@@ -1245,9 +2057,38 @@ function centerCameraOnCurrent(){
   renderOnce();
 }
 
+// Tear down every cluster, the trail, and the cross-links, leaving an empty scene.
+// Used both when starting a fresh page (so the screen blanks during the load
+// instead of leaving the old graph and its dangling return ray hanging) and when
+// resetting all the way back to the welcome screen.
+function clearAllScene(){
+  clearCrossLinks();
+  clusterGroups.forEach(g=>{
+    if (g.star !== starGroup) disposeGroup(g.star);
+    if (g.edge !== edgeGroup) disposeGroup(g.edge);
+    scene.remove(g.star); scene.remove(g.edge);
+  });
+  clearGroup(starGroup);
+  clearGroup(edgeGroup);
+  scene.add(starGroup); scene.add(edgeGroup);
+  starGroup.position.set(0, 0, 0);
+  edgeGroup.position.set(0, 0, 0);
+  wordToMesh.clear();
+  clusterGroups.clear();
+  centerPositions.clear();
+  journeyPositions.clear();
+  journeyMeta.clear();
+  ghostQueue.length = 0;
+  trailLine.visible = false;
+  hovered = null;
+  tooltip.classList.remove('show');
+  hideTypeLegend();
+}
+
 function onGo(val){
   const value = val.trim();
   if (!value) return;
+  teardownOverview();
   closePreview();
   const help = document.getElementById('helpModal');
   if (help) help.classList.add('hidden');
@@ -1263,14 +2104,46 @@ function onGo(val){
   controls.target.set(0,0,0);
   camera.position.copy(DEFAULT_CAM_POS);
   controls.update();
-  hovered = null;
-  tooltip.classList.remove('show');
-  clusterGroups.forEach(g=>{
-    if (g.star !== starGroup) disposeGroup(g.star);
-    if (g.edge !== edgeGroup) disposeGroup(g.edge);
-    scene.remove(g.star); scene.remove(g.edge);
-  });
+  // Blank the screen right away so nothing from the previous page lingers during
+  // the fetch (the new cluster is built into the now-empty groups by rebuildStar).
+  clearAllScene();
+  renderOnce();
   rebuildStar(value);
+}
+
+// Full reset back to the first-run welcome / blank state (not just the camera).
+function resetToWelcome(){
+  teardownOverview();
+  closePreview();
+  const help = document.getElementById('helpModal');
+  if (help) help.classList.add('hidden');
+  clearAllScene();
+  currentTitle = null;
+  history = [];
+  historyIndex = -1;
+  visited.clear();
+  showBacklinks = false;
+  const backToggle = document.getElementById('backToggle');
+  if (backToggle) backToggle.checked = false;
+  controls.target.set(0, 0, 0);
+  camera.position.copy(DEFAULT_CAM_POS);
+  controls.update();
+  updateBreadcrumbs();
+  // Restore the welcome panel and clear the page content.
+  const info = document.getElementById('info');
+  if (info) info.classList.add('empty');
+  const heading = document.getElementById('currentWord');
+  if (heading) heading.textContent = 'Select a page';
+  const summary = document.getElementById('summary');
+  if (summary) summary.innerHTML = '';
+  const nbControls = document.getElementById('neighborControls');
+  if (nbControls) nbControls.innerHTML = '';
+  const neighbors = document.getElementById('neighbors');
+  if (neighbors) neighbors.innerHTML = '';
+  setLoading(false);
+  // Drop the shareable hash so a reload also starts blank.
+  if (location.hash) window.history.replaceState(null, '', location.pathname + location.search);
+  renderOnce();
 }
 
 function setShowBacklinks(val){
@@ -1291,6 +2164,16 @@ function setTrailMode(val){
   if (val) updateTrail();
 }
 
+function setStarSizeMode(val){
+  starSizeMode = val;
+  applyStarSizes();
+}
+
+function setShowCrossLinks(val){
+  showCrossLinks = val;
+  if (!isAnimating && !overviewActive) ensureCrossLinks(currentTitle);
+}
+
 function getHistory(){ return history.slice(); }
 
 // Restore a multi-step journey (from a shared hash URL or a saved bookmark).
@@ -1298,6 +2181,7 @@ function getHistory(){ return history.slice(); }
 function loadPath(path){
   if (!Array.isArray(path) || !path.length) return;
   if (isAnimating) return;
+  teardownOverview();
   closePreview();
   const help = document.getElementById('helpModal');
   if (help) help.classList.add('hidden');
@@ -1340,16 +2224,17 @@ function fadeInGroups(){
   const start = performance.now();
   function tick(now){
     const t = Math.min(1, (now - start) / duration);
+    // Only animate objects whose base opacity we captured at the start. Cross-links
+    // are fetched asynchronously and can be added mid-fade; they must keep their own
+    // drawn opacity (0.46) rather than being forced to full opacity by a fallback.
     starGroup.traverse(obj => {
-      if(obj.material && 'opacity' in obj.material){
-        const base = (obj.userData && obj.userData.baseOpacity != null) ? obj.userData.baseOpacity : 1;
-        obj.material.opacity = base * t;
+      if(obj.material && 'opacity' in obj.material && obj.userData && obj.userData.baseOpacity != null){
+        obj.material.opacity = obj.userData.baseOpacity * t;
       }
     });
     edgeGroup.traverse(obj => {
-      if(obj.material && 'opacity' in obj.material){
-        const base = (obj.userData && obj.userData.baseOpacity != null) ? obj.userData.baseOpacity : 1;
-        obj.material.opacity = base * t;
+      if(obj.material && 'opacity' in obj.material && obj.userData && obj.userData.baseOpacity != null){
+        obj.material.opacity = obj.userData.baseOpacity * t;
       }
     });
     renderOnce();
@@ -1360,11 +2245,12 @@ function fadeInGroups(){
 
 function animate(){
   requestAnimationFrame(animate);
-  // Drift the camera slowly when idle (not mid-travel, no preview open, motion allowed).
-  controls.autoRotate = !REDUCED && !isAnimating && !previewTarget && (performance.now() - lastInteraction > IDLE_MS);
+  // Drift the camera slowly when idle (not mid-travel, no preview/overview open, motion allowed).
+  controls.autoRotate = !REDUCED && !isAnimating && !previewTarget && !overviewActive && (performance.now() - lastInteraction > IDLE_MS);
   controls.update();
   applyViewOffset();
-  updateHover();
+  if (overviewActive) updateOverviewLabels();
+  else updateHover();
 
   // scale-in blooms
   for (let i = _blooms.length - 1; i >= 0; i--) {
@@ -1395,7 +2281,7 @@ function animate(){
         obj.position.copy(pos);
         const s = 0.6 + 0.25 * Math.sin((now + d.phase) * 6.0);
         obj.scale.set(s, s, 1);
-      } else if (obj.userData && obj.userData.kind === 'ray' && obj.userData.baseColorHex === RETURN_COLOR && obj.userData.normalMat) {
+      } else if (obj.userData && obj.userData.kind === 'ray' && obj.userData.baseColorHex === RETURN_COLOR && obj.userData.normalMat && !overviewActive && !overviewTransitioning) {
         obj.userData.normalMat.opacity = 0.65 + 0.35 * Math.sin(now * 2.5);
       }
     });
@@ -1436,13 +2322,13 @@ function animate(){
   // to run at the throttled idle rate, so it's intentionally not counted here.
   const active = isAnimating || _blooms.length > 0 || hovered || viewOffsetSettling() || (tMs - lastInteraction < 1000);
   if (active || tMs - lastRenderTime >= IDLE_FRAME_MS) {
-    composer.render();
+    renderScene();
     lastRenderTime = tMs;
   }
 }
 let lastRenderTime = 0;
 const IDLE_FRAME_MS = 1000 / 30;
-function renderOnce(){ composer.render(); lastRenderTime = performance.now(); }
+function renderOnce(){ renderScene(); lastRenderTime = performance.now(); }
 
 function showToast(msg){
   const t = document.getElementById('toast');
@@ -1579,7 +2465,12 @@ export {
   onGo,
   setShowBacklinks,
   setTrailMode,
+  setStarSizeMode,
+  setShowCrossLinks,
+  toggleOverview,
+  isOverviewActive,
   centerCameraOnCurrent,
+  resetToWelcome,
   goBackOne,
   goForwardOne,
   jumpToBreadcrumb,
