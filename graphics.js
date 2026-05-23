@@ -257,23 +257,38 @@ container.addEventListener('mousemove', (e)=>{
 // long-press action ring (a held pointer is excluded from tap handling). ---
 let tapStart = null;       // { x, y, t, moved } for the active single-pointer gesture
 let activePointers = 0;
+const LONGPRESS_MS = 450;
+let longPressTimer = null;
+function cancelLongPress(){ if (longPressTimer){ clearTimeout(longPressTimer); longPressTimer = null; } }
 function isTouchDragging(){ return lastPointerWasTouch && !!(tapStart && tapStart.moved); }
 renderer.domElement.addEventListener('pointerdown', (e)=>{
   activePointers++;
   lastPointerWasTouch = (e.pointerType === 'touch' || e.pointerType === 'pen');
-  if (activePointers === 1) tapStart = { x: e.clientX, y: e.clientY, t: performance.now(), moved: false };
-  else if (tapStart) tapStart.moved = true; // a second finger (pinch) cancels the tap
+  if (activePointers === 1){
+    tapStart = { x: e.clientX, y: e.clientY, t: performance.now(), moved: false };
+    // Touch long-press opens the action ring (desktop uses right-click; see below).
+    if (lastPointerWasTouch){
+      cancelLongPress();
+      const px = e.clientX, py = e.clientY;
+      longPressTimer = setTimeout(()=>{
+        longPressTimer = null;
+        if (tapStart && !tapStart.moved){ tapStart = null; openActionRing(px, py); }
+      }, LONGPRESS_MS);
+    }
+  } else { if (tapStart) tapStart.moved = true; cancelLongPress(); } // 2nd finger (pinch) cancels tap + long-press
 });
 renderer.domElement.addEventListener('pointermove', (e)=>{
-  if (tapStart && !tapStart.moved && Math.hypot(e.clientX - tapStart.x, e.clientY - tapStart.y) > 10) tapStart.moved = true;
+  if (tapStart && !tapStart.moved && Math.hypot(e.clientX - tapStart.x, e.clientY - tapStart.y) > 10){ tapStart.moved = true; cancelLongPress(); }
 });
 renderer.domElement.addEventListener('pointerup', (e)=>{
   activePointers = Math.max(0, activePointers - 1);
+  cancelLongPress();
   const ts = tapStart; tapStart = null;
-  if (!ts || ts.moved || performance.now() - ts.t > 600) return; // moved → drag; held → (future) long-press
+  if (!ts || ts.moved || performance.now() - ts.t > 600) return; // moved → drag; held → long-press fired
   handleTap(e.clientX, e.clientY);
 });
-renderer.domElement.addEventListener('pointercancel', ()=>{ activePointers = Math.max(0, activePointers - 1); tapStart = null; });
+renderer.domElement.addEventListener('pointercancel', ()=>{ activePointers = Math.max(0, activePointers - 1); cancelLongPress(); tapStart = null; });
+renderer.domElement.addEventListener('contextmenu', (e)=>{ e.preventDefault(); openActionRing(e.clientX, e.clientY); }); // desktop right-click
 
 // Pick the spoke/star under a screen coord. Used by tap handling so selection
 // never depends on the RAF-driven hover state (which is stale at click time on touch).
@@ -333,6 +348,124 @@ function notifyNavigate(){
     window.dispatchEvent(new Event('starwiki:navigate'));
   }
 }
+
+// ====== Contextual action ring (long-press on touch / right-click on desktop) ======
+let ringEl = null, ringBackdrop = null, ringOpen = false;
+
+function pickAnyAt(clientX, clientY){
+  const rect = renderer.domElement.getBoundingClientRect();
+  const m = new THREE.Vector2(
+    ((clientX - rect.left) / rect.width) * 2 - 1,
+    -((clientY - rect.top) / rect.height) * 2 + 1
+  );
+  raycaster.setFromCamera(m, camera);
+  const hits = raycaster.intersectObjects([...edgeGroup.children, ...starGroup.children], false);
+  return hits.length ? hits[0].object : null;
+}
+
+const wikiUrl = (t)=> `https://en.wikipedia.org/wiki/${encodeURIComponent(t)}`;
+function setPath(field, title){ window.dispatchEvent(new CustomEvent('starwiki:setpath', { detail: { field, title } })); }
+
+function actionsForContext(clientX, clientY){
+  // Empty-space / map "command wheel"
+  const commandWheel = {
+    label: '',
+    actions: [
+      { icon: 'ic-home',     label: 'Recenter',  run: ()=> centerCameraOnCurrent() },
+      { icon: 'ic-surprise', label: 'Surprise',  run: ()=> document.getElementById('randomBtn')?.click() },
+      { icon: 'ic-map',      label: overviewActive ? 'Exit map' : 'Galaxy', run: ()=> document.getElementById('mapBtn')?.click() },
+      { icon: 'ic-link',     label: 'Copy link', run: ()=> copyShareLink() },
+    ]
+  };
+  if (overviewActive) return commandWheel;
+  const obj = pickAnyAt(clientX, clientY);
+  if (obj && obj.userData && obj.userData.kind === 'center'){
+    return {
+      label: currentTitle,
+      actions: [
+        { icon: 'ic-home',     label: 'Recenter',  run: ()=> centerCameraOnCurrent() },
+        { icon: 'ic-external', label: 'Wikipedia', run: ()=> window.open(wikiUrl(currentTitle), '_blank', 'noopener') },
+        { icon: 'ic-link',     label: 'Copy link', run: ()=> copyShareLink() },
+        { icon: 'ic-surprise', label: 'Surprise',  run: ()=> document.getElementById('randomBtn')?.click() },
+      ]
+    };
+  }
+  if (obj && obj.userData && obj.userData.title){
+    const title = obj.userData.title;
+    const isReturn = (title === getChainPrev() && obj.userData.kind === 'ray');
+    return {
+      label: title,
+      actions: [
+        { icon: 'ic-star',     label: isReturn ? 'Go back' : 'Travel', run: ()=> isReturn ? goBackOne() : travelToNeighbor(title) },
+        { icon: 'ic-search',   label: 'Preview',   run: ()=> openPreview(title) },
+        { icon: 'ic-external', label: 'Wikipedia', run: ()=> window.open(wikiUrl(title), '_blank', 'noopener') },
+        { icon: 'ic-route',    label: 'Path from', run: ()=> setPath('from', title) },
+        { icon: 'ic-route',    label: 'Path to',   run: ()=> setPath('to', title) },
+      ]
+    };
+  }
+  return commandWheel;
+}
+
+function ensureRingDom(){
+  if (ringEl) return;
+  ringBackdrop = document.createElement('div');
+  ringBackdrop.className = 'ring-backdrop';
+  ringBackdrop.addEventListener('pointerdown', (e)=>{ e.preventDefault(); e.stopPropagation(); closeActionRing(); });
+  ringEl = document.createElement('div');
+  ringEl.className = 'action-ring';
+  document.body.appendChild(ringBackdrop);
+  document.body.appendChild(ringEl);
+}
+
+function openActionRing(clientX, clientY){
+  if (isAnimating || !currentTitle) return;
+  const ctx = actionsForContext(clientX, clientY);
+  if (!ctx || !ctx.actions.length) return;
+  ensureRingDom();
+  ringEl.innerHTML = '';
+  if (ctx.label){
+    const c = document.createElement('div');
+    c.className = 'ring-center';
+    c.textContent = ctx.label;
+    ringEl.appendChild(c);
+  }
+  const n = ctx.actions.length;
+  const R = 82;
+  ctx.actions.forEach((a, i)=>{
+    const ang = -Math.PI / 2 + (i / n) * Math.PI * 2; // first action at the top
+    const bx = Math.cos(ang) * R, by = Math.sin(ang) * R;
+    const btn = document.createElement('button');
+    btn.className = 'ring-btn';
+    btn.style.left = `calc(50% + ${bx.toFixed(1)}px)`;
+    btn.style.top = `calc(50% + ${by.toFixed(1)}px)`;
+    btn.setAttribute('aria-label', a.label);
+    btn.innerHTML = `<svg class="icon"><use href="#${a.icon}"/></svg><span>${a.label}</span>`;
+    btn.addEventListener('click', (e)=>{ e.stopPropagation(); const run = a.run; closeActionRing(); run(); });
+    ringEl.appendChild(btn);
+  });
+  // Anchor at the press point, clamped so the whole ring stays on-screen.
+  const pad = R + 56;
+  const cx = Math.min(window.innerWidth - pad, Math.max(pad, clientX));
+  const cy = Math.min(window.innerHeight - pad, Math.max(pad, clientY));
+  ringEl.style.left = cx + 'px';
+  ringEl.style.top = cy + 'px';
+  ringBackdrop.style.display = 'block';
+  ringEl.style.display = 'block';
+  ringOpen = true;
+  controls.enabled = false; // freeze the view while the ring is up
+  // restart the bloom-in animation
+  ringEl.classList.remove('show'); void ringEl.offsetWidth; ringEl.classList.add('show');
+}
+
+function closeActionRing(){
+  if (!ringOpen) return;
+  ringOpen = false;
+  if (ringEl){ ringEl.style.display = 'none'; ringEl.classList.remove('show'); }
+  if (ringBackdrop) ringBackdrop.style.display = 'none';
+  controls.enabled = true;
+}
+document.addEventListener('keydown', (e)=>{ if (e.key === 'Escape' && ringOpen) closeActionRing(); });
 
 // ====== Utility ======
 function seededHash(str){

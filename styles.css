@@ -334,6 +334,28 @@ footer { position:relative; z-index:2; padding:7px 16px; border-top:1px solid va
   .preview-link { display:block; margin-top:8px; font-size:13px; color:var(--accent); text-decoration:none; }
   .preview-link:hover { text-decoration:underline; }
 
+/* ===== Contextual action ring (long-press / right-click) ===== */
+.ring-backdrop { position:fixed; inset:0; z-index:60; display:none; background:rgba(7,8,15,0.22); }
+.action-ring { position:fixed; z-index:61; width:0; height:0; display:none; pointer-events:none;
+  opacity:0; transform:scale(0.6); transform-origin:center;
+  transition:opacity 0.16s var(--ease-out), transform 0.18s var(--ease-out); }
+.action-ring.show { opacity:1; transform:scale(1); }
+.ring-center { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
+  max-width:160px; padding:5px 11px; border-radius:999px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  font-family:var(--font-display); font-size:12px; font-weight:600; color:var(--text);
+  background:rgba(18,24,50,0.97); border:1px solid var(--accent); box-shadow:var(--shadow-2); pointer-events:none; }
+.ring-btn { position:absolute; transform:translate(-50%,-50%); width:58px; height:58px; padding:0;
+  display:flex; flex-direction:column; align-items:center; justify-content:center; gap:3px;
+  border-radius:50%; border:1px solid var(--accent); background:rgba(18,24,50,0.97);
+  -webkit-backdrop-filter:var(--blur); backdrop-filter:var(--blur); color:var(--text);
+  cursor:pointer; pointer-events:auto; box-shadow:var(--shadow-2);
+  transition:background var(--dur), border-color var(--dur); }
+.ring-btn:hover, .ring-btn:focus-visible { background:rgba(122,162,247,0.22); border-color:var(--accent-2); outline:none; }
+.ring-btn:active { transform:translate(-50%,-50%) scale(0.92); }
+.ring-btn .icon { width:19px; height:19px; color:var(--accent-2); }
+.ring-btn span { font-size:9px; line-height:1; color:var(--text-dim); letter-spacing:0.01em; }
+@media (prefers-reduced-motion: reduce){ .action-ring { transition:none; } }
+
 /* Hide the tagline once the toolbar needs the room */
 @media (max-width: 1040px) { .brand-tag { display:none; } }
 

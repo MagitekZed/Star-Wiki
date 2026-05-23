@@ -169,6 +169,14 @@ function closePathModal(){
   pathOverlay.classList.add('hidden');
 }
 
+// Action ring → "Path from/to here": pre-fill a field and open the path finder.
+window.addEventListener('starwiki:setpath', (e)=>{
+  const { field, title } = e.detail || {};
+  if (field === 'from' && pathFrom) pathFrom.value = title || '';
+  else if (field === 'to' && pathTo) pathTo.value = title || '';
+  openPathModal();
+});
+
 async function runPathFind(){
   const from = pathFrom.value.trim();
   const to = pathTo.value.trim();
