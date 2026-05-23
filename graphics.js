@@ -290,9 +290,25 @@ renderer.domElement.addEventListener('pointerup', (e)=>{
 renderer.domElement.addEventListener('pointercancel', ()=>{ activePointers = Math.max(0, activePointers - 1); cancelLongPress(); tapStart = null; });
 renderer.domElement.addEventListener('contextmenu', (e)=>{ e.preventDefault(); openActionRing(e.clientX, e.clientY); }); // desktop right-click
 
+// The spokes all converge on the center node, so a raycast near the middle tends to
+// grab a ray's inner stub instead of the center star. Claim a small screen radius
+// around the center node for the center itself.
+const CENTER_PICK_R = 34; // px
+function centerStarAt(clientX, clientY){
+  const cs = starGroup.children.find(o => o.userData && o.userData.kind === 'center' && o.visible);
+  if (!cs) return null;
+  const rect = renderer.domElement.getBoundingClientRect();
+  const v = cs.getWorldPosition(new THREE.Vector3()).project(camera);
+  if (v.z > 1) return null; // behind the camera
+  const sx = rect.left + (v.x * 0.5 + 0.5) * rect.width;
+  const sy = rect.top + (-v.y * 0.5 + 0.5) * rect.height;
+  return (Math.hypot(clientX - sx, clientY - sy) <= CENTER_PICK_R) ? cs : null;
+}
+
 // Pick the spoke/star under a screen coord. Used by tap handling so selection
 // never depends on the RAF-driven hover state (which is stale at click time on touch).
 function pickObjectAt(clientX, clientY){
+  if (centerStarAt(clientX, clientY)) return null; // near the center = the center node, not a spoke stub
   const rect = renderer.domElement.getBoundingClientRect();
   const m = new THREE.Vector2(
     ((clientX - rect.left) / rect.width) * 2 - 1,
@@ -353,6 +369,8 @@ function notifyNavigate(){
 let ringEl = null, ringBackdrop = null, ringOpen = false;
 
 function pickAnyAt(clientX, clientY){
+  const cs = centerStarAt(clientX, clientY);
+  if (cs) return cs; // near the center = the center node, not a converging spoke
   const rect = renderer.domElement.getBoundingClientRect();
   const m = new THREE.Vector2(
     ((clientX - rect.left) / rect.width) * 2 - 1,
