@@ -139,6 +139,8 @@ if (sheetHandle && infoEl) {
   // Navigating (selecting a link/search) while the sheet is open: collapse it
   // first so the freshly-drawn cluster — and the toolbar — are visible again.
   window.addEventListener('starwiki:navigate', ()=>{ if (isMobile() && curHeight() > COLLAPSED + 4) applyHeight(COLLAPSED); });
+  // Previewing a map node in the panel: lift the sheet so the info is readable.
+  window.addEventListener('starwiki:expandsheet', ()=>{ if (isMobile() && curHeight() <= COLLAPSED + 4) applyHeight(snaps()[1]); });
 }
 
 // Mobile "More" menu shortcuts that mirror the demoted toolbar buttons

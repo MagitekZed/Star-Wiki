@@ -148,7 +148,19 @@ header h1.brand { display:flex; align-items:center; gap:8px; margin:0 6px 0 0; f
 .map-popup .mp-travel { margin-top:11px; width:100%; display:flex; align-items:center; justify-content:center; gap:6px; padding:8px; border:1px solid var(--accent); border-radius:var(--radius-sm); background:rgba(122,162,247,0.16); color:var(--accent-2); font-size:13px; font-weight:600; cursor:pointer; transition:background var(--dur); }
 .map-popup .mp-travel:hover { background:rgba(122,162,247,0.28); }
 .map-popup .mp-travel .icon { width:14px; height:14px; }
-.map-popup .mp-here { margin-top:11px; text-align:center; font-size:12px; color:var(--muted); font-style:italic; }
+.map-popup .mp-here { margin-top:6px; text-align:center; font-size:12px; color:var(--muted); font-style:italic; }
+.map-popup .mp-travel { margin-top:6px; }
+.map-popup .mp-actions { display:flex; gap:6px; margin-top:7px; }
+.map-popup .mp-act { flex:1; padding:6px; border:1px solid var(--hairline); border-radius:var(--radius-sm); background:rgba(255,255,255,0.04); color:var(--text-dim); font-size:12px; cursor:pointer; transition:background var(--dur), border-color var(--dur), color var(--dur); }
+.map-popup .mp-act:hover { border-color:var(--accent); color:var(--text); background:rgba(122,162,247,0.12); }
+
+/* Panel-preview of a non-current map node */
+#info.previewing { box-shadow: inset 0 0 0 1.5px var(--accent), var(--shadow-2); }
+.preview-banner { display:flex; flex-direction:column; align-items:flex-start; gap:7px; margin-bottom:10px; padding:8px 11px; border-radius:var(--radius-sm); background:rgba(122,162,247,0.12); border:1px solid var(--accent); font-size:12px; color:var(--text-dim); }
+.preview-return { padding:5px 11px; border-radius:999px; border:1px solid var(--accent); background:rgba(122,162,247,0.16); color:var(--accent-2); font-size:12px; font-weight:600; cursor:pointer; transition:background var(--dur); white-space:nowrap; max-width:100%; overflow:hidden; text-overflow:ellipsis; }
+.preview-return:hover { background:rgba(122,162,247,0.28); }
+.neighbor.noclick { cursor:default; }
+.neighbor.noclick:hover { transform:none; border-color:var(--hairline); box-shadow:none; background:rgba(255,255,255,0.03); }
 .menu-item { display:flex; align-items:center; gap:9px; width:100%; padding:9px 10px; border:none; background:none; color:var(--text); cursor:pointer; border-radius:var(--radius-sm); font:inherit; font-size:13px; text-align:left; }
 .menu-item:hover { background:rgba(255,255,255,0.08); }
 .menu-item .icon { width:16px; height:16px; color:var(--muted); }

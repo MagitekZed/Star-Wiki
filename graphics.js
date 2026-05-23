@@ -337,7 +337,7 @@ function confirmTarget(obj, x, y){
 
 function handleTap(clientX, clientY){
   if (isAnimating) return; // ignore taps during animation
-  if (overviewActive) { closeMapNodePopup(); return; } // tapping the void dismisses a node popup
+  if (overviewActive) { closeMapNodePopup(); exitPanelPreview(); return; } // tapping the void dismisses the popup + preview
   // Anchor hover to the tap point so the title tooltip shows where the finger landed.
   const rect = renderer.domElement.getBoundingClientRect();
   mouse.x = ((clientX - rect.left) / rect.width) * 2 - 1;
@@ -1366,26 +1366,13 @@ function openMapNodePopup(title){
   const sprite = overviewNodeSprites.get(title);
   if (!p || !sprite) return;
   const isCur = title === currentTitle;
-  const deg = overviewRelations.get(title) || 0;
-  const bucket = overviewTypes.get(title) || 'concept';
-  const meta = journeyMeta.get(title) || {};
-  const typeLabel = TYPE_BUCKETS[bucket].label;
-  const typeHex = '#' + new THREE.Color(TYPE_BUCKETS[bucket].hue).getHexString();
-  const lenKb = (typeof meta.length === 'number' && meta.length > 0) ? Math.round(meta.length / 1024) + ' KB' : null;
-  const connText = deg === 0 ? 'No links to your other stops'
-    : `Linked with ${deg} other article${deg > 1 ? 's' : ''} in your journey`;
-  const chips = Array.isArray(meta.categories)
-    ? meta.categories.slice(0, 3).map(c => `<span class="mp-chip">${escapeHtml(c)}</span>`).join('')
-    : '';
+  // Slim popup: the full info now lives in the panel, so the popup is just actions.
   p.innerHTML =
     `<button class="mp-close" aria-label="Close">&times;</button>` +
-    `<div class="mp-title">${escapeHtml(title)}</div>` +
-    `<div class="mp-type"><i style="background:${typeHex}"></i>${typeLabel}</div>` +
-    `<div class="mp-conn">${connText}${lenKb ? ` · ${lenKb}` : ''}</div>` +
-    (chips ? `<div class="mp-chips">${chips}</div>` : '') +
     (isCur
       ? `<div class="mp-here">You are here</div>`
-      : `<button class="mp-travel">Travel here <svg class="icon"><use href="#ic-star"/></svg></button>`);
+      : `<button class="mp-travel">Travel here <svg class="icon"><use href="#ic-star"/></svg></button>` +
+        `<div class="mp-actions"><button class="mp-act" data-act="from">Path from</button><button class="mp-act" data-act="to">Path to</button></div>`);
   p.dataset.title = title;
   p.classList.remove('hidden');
   // Position near the node's projected screen point.
@@ -1404,6 +1391,7 @@ function openMapNodePopup(title){
     const idx = history.lastIndexOf(title);
     transitionOutOfOverview(() => { if (idx >= 0 && idx !== historyIndex) jumpToBreadcrumb(idx); });
   });
+  p.querySelectorAll('.mp-act').forEach(b => b.addEventListener('click', () => { closeMapNodePopup(); setPath(b.dataset.act, title); }));
 }
 
 function escapeHtml(s){
@@ -1619,12 +1607,14 @@ function toggleOverview(force){
   if (overviewTransitioning) return;
   if (want === overviewActive) return;
   if (want){ if (!isAnimating) transitionIntoOverview(); }
-  else transitionOutOfOverview();
+  else { exitPanelPreview(); transitionOutOfOverview(); } // restore the current page's panel on leaving the map
 }
 
 function onOverviewLabelClick(title){
   if (overviewTransitioning) return;
-  // Open the info popup; travelling happens from its "Travel here" button.
+  // Selecting a node shows its full info in the panel; the popup just offers actions.
+  if (title === currentTitle) exitPanelPreview(); // back on the current node → restore its panel
+  else previewNodeInPanel(title);
   openMapNodePopup(title);
 }
 
@@ -1636,6 +1626,7 @@ let journeyBuilding = false; // true while loadPath builds a multi-stop trail
 async function travelToNeighbor(targetTitle, addToHistory=true){
   if (isAnimating || overviewTransitioning || journeyBuilding || !currentTitle) return;
   peekedObject = null;
+  clearPanelPreview();
   notifyNavigate();
   if (overviewActive) teardownOverview(); // any navigation leaves the overview
 
@@ -1785,16 +1776,32 @@ let currentNeighbors = [];
 let currentChainPrev = null;
 let currentMeta = {};
 let sidebarToken = 0; // bumped each render so async facts can detect a stale sidebar
+// Panel-preview: when set, the info panel shows a previewed (non-current) map node
+// without changing the journey. savedSidebar/lastSidebar let us restore the real page.
+let panelPreviewTitle = null;
+let savedSidebar = null;
+let lastSidebar = null;
 
-function updateSidebar(center, neighbors, chainPrev, metaByTitle = {}){
+function updateSidebar(center, neighbors, chainPrev, metaByTitle = {}, previewOf = null){
   const token = ++sidebarToken;
   const info = document.getElementById('info');
-  if (info){ info.classList.remove('empty'); info.scrollTop = 0; } // new page: leave welcome state, scroll to top
+  if (info){ info.classList.remove('empty'); info.classList.toggle('previewing', !!previewOf); info.scrollTop = 0; }
   const heading = document.getElementById('currentWord');
   heading.textContent = center.title;
 
   const summaryDiv = document.getElementById('summary');
   summaryDiv.innerHTML = '';
+  if (previewOf){
+    const banner = document.createElement('div');
+    banner.className = 'preview-banner';
+    banner.appendChild(Object.assign(document.createElement('span'), { textContent: 'Previewing — not your current stop' }));
+    const ret = document.createElement('button');
+    ret.className = 'preview-return';
+    ret.textContent = '← Back to ' + previewOf;
+    ret.addEventListener('click', exitPanelPreview);
+    banner.appendChild(ret);
+    summaryDiv.appendChild(banner);
+  }
   if (center.thumbnailUrl) {
     const img = document.createElement('img');
     img.src = center.thumbnailUrl;
@@ -1865,6 +1872,38 @@ function updateSidebar(center, neighbors, chainPrev, metaByTitle = {}){
   }
 
   renderNeighborList(true);
+  if (!previewOf) lastSidebar = { center, neighbors: currentNeighbors.slice(), chainPrev: currentChainPrev, meta: currentMeta };
+}
+
+// Show a non-current map node's full info in the panel without leaving the journey.
+async function previewNodeInPanel(title){
+  if (!title || title === currentTitle) return;
+  if (!panelPreviewTitle) savedSidebar = lastSidebar; // snapshot the real current page once
+  panelPreviewTitle = title;
+  if (window.matchMedia && window.matchMedia('(max-width: 720px)').matches) window.dispatchEvent(new Event('starwiki:expandsheet'));
+  setLoading(true);
+  let star;
+  try { star = await getPageStar(title, showBacklinks); }
+  catch { setLoading(false); return; }
+  setLoading(false);
+  if (panelPreviewTitle !== title) return; // superseded by another selection
+  updateSidebar(star.center, star.neighbors.slice(0, 20), null, star.metaByTitle, currentTitle);
+}
+
+// Leave preview WITHOUT restoring — used when navigating away (a new page will render).
+function clearPanelPreview(){
+  panelPreviewTitle = null;
+  savedSidebar = null;
+  document.getElementById('info')?.classList.remove('previewing');
+}
+// Leave preview and restore the real current page's panel — used on void-tap / closing the map.
+function exitPanelPreview(){
+  if (!panelPreviewTitle) return;
+  const saved = savedSidebar;
+  panelPreviewTitle = null;
+  savedSidebar = null;
+  if (saved) updateSidebar(saved.center, saved.neighbors, saved.chainPrev, saved.meta);
+  else document.getElementById('info')?.classList.remove('previewing');
 }
 
 async function renderFacts(wikidataId, box, token){
@@ -1914,14 +1953,19 @@ function renderNeighborList(animateIn = false){
   list.forEach((nb, i) => {
     const row = document.createElement('div');
     row.className = 'neighbor';
-    row.tabIndex = 0;
     if (animateIn) {
       row.classList.add('enter');
       row.style.animationDelay = (i * 28) + 'ms';
     }
     if (visited.has(nb)) row.classList.add('visited');
-    row.addEventListener('click', e=> openPreview(nb, e.clientX, e.clientY));
-    row.addEventListener('keydown', e=>{ if(e.key==='Enter') openPreview(nb); });
+    if (panelPreviewTitle) {
+      // Preview mode: neighbours are informational only (this isn't your current page).
+      row.classList.add('noclick');
+    } else {
+      row.tabIndex = 0;
+      row.addEventListener('click', e=> openPreview(nb, e.clientX, e.clientY));
+      row.addEventListener('keydown', e=>{ if(e.key==='Enter') openPreview(nb); });
+    }
 
     const img = document.createElement('img');
     img.className = 'thumb';
@@ -2356,6 +2400,7 @@ function onGo(val){
   const value = val.trim();
   if (!value) return;
   peekedObject = null;
+  clearPanelPreview();
   notifyNavigate();
   teardownOverview();
   closePreview();
@@ -2382,6 +2427,7 @@ function onGo(val){
 
 // Full reset back to the first-run welcome / blank state (not just the camera).
 function resetToWelcome(){
+  clearPanelPreview();
   teardownOverview();
   closePreview();
   const help = document.getElementById('helpModal');
@@ -2451,6 +2497,7 @@ function getHistory(){ return history.slice(); }
 function loadPath(path){
   if (!Array.isArray(path) || !path.length) return;
   if (isAnimating || journeyBuilding) return;
+  clearPanelPreview();
   teardownOverview();
   closePreview();
   const help = document.getElementById('helpModal');
