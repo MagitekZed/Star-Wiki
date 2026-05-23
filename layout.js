@@ -22,9 +22,18 @@ import {
 
 const searchInput = document.getElementById('search');
 let suggestTimer = null;
+let currentSuggestions = [];
 searchInput.addEventListener('input', (e)=>{
+  const val = e.target.value;
+  // Picking a suggestion fires 'input' with no/replacement inputType — search at once
+  if (currentSuggestions.includes(val) && (!e.inputType || e.inputType === 'insertReplacementText')) {
+    clearTimeout(suggestTimer);
+    onGo(val);
+    searchInput.blur();
+    return;
+  }
   clearTimeout(suggestTimer);
-  const q = e.target.value.trim();
+  const q = val.trim();
   if (!q) { populateDatalist([]); return; }
   suggestTimer = setTimeout(async ()=>{
     try {
@@ -36,6 +45,7 @@ searchInput.addEventListener('input', (e)=>{
 });
 
 function populateDatalist(list){
+  currentSuggestions = list;
   const dl = document.getElementById('wordlist');
   dl.innerHTML = '';
   list.forEach(w => {
@@ -84,8 +94,10 @@ const sheetHandle = document.getElementById('sheetHandle');
 const infoEl = document.getElementById('info');
 if (sheetHandle && infoEl) {
   const COLLAPSED = 88; // keep in sync with --sheet-collapsed-h
+  const FOOTER = 26;    // keep in sync with --footer-h
   const isMobile = () => window.matchMedia('(max-width: 720px)').matches;
-  const snaps = () => { const h = window.innerHeight; return [COLLAPSED, Math.round(h*0.5), Math.round(h*0.86)]; };
+  // Full snap reaches the very top (covering the toolbar); footer stays pinned below
+  const snaps = () => { const h = window.innerHeight; return [COLLAPSED, Math.round(h*0.5), h - FOOTER]; };
   const curHeight = () => infoEl.getBoundingClientRect().height;
   const nearest = (h) => snaps().reduce((a,b)=> Math.abs(b-h) < Math.abs(a-h) ? b : a);
   const applyHeight = (h)=>{
@@ -98,6 +110,7 @@ if (sheetHandle && infoEl) {
     if (!isMobile()) return;
     dragging = true; moved = 0; startY = e.clientY; startH = curHeight();
     infoEl.classList.add('dragging');
+    document.body.classList.add('sheet-dragging');
     try { sheetHandle.setPointerCapture(e.pointerId); } catch {}
   });
   sheetHandle.addEventListener('pointermove', (e)=>{
@@ -111,6 +124,7 @@ if (sheetHandle && infoEl) {
     if (!dragging) return;
     dragging = false;
     infoEl.classList.remove('dragging');
+    document.body.classList.remove('sheet-dragging');
     try { sheetHandle.releasePointerCapture(e.pointerId); } catch {}
     const [lo, mid] = snaps();
     applyHeight(moved < 6 ? (curHeight() <= lo + 4 ? mid : lo) : nearest(curHeight()));
@@ -119,6 +133,10 @@ if (sheetHandle && infoEl) {
   sheetHandle.addEventListener('pointercancel', endDrag);
 
   infoEl.addEventListener('transitionend', (e)=>{ if (e.propertyName === 'height') window.dispatchEvent(new Event('resize')); });
+
+  // Navigating (selecting a link/search) while the sheet is open: collapse it
+  // first so the freshly-drawn cluster — and the toolbar — are visible again.
+  window.addEventListener('starwiki:navigate', ()=>{ if (isMobile() && curHeight() > COLLAPSED + 4) applyHeight(COLLAPSED); });
 }
 
 // Mobile "More" menu shortcuts that mirror the demoted toolbar buttons

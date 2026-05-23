@@ -59,11 +59,8 @@ header h1.brand { display:flex; align-items:center; gap:8px; margin:0 6px 0 0; f
 .controls { display:flex; gap:8px; align-items:center; flex:1; min-width:0; flex-wrap:wrap; }
 /* Search field with an embedded submit (magnifier) */
 .search-wrap { position:relative; display:flex; align-items:center; flex:1 1 240px; min-width:150px; max-width:460px; }
-.search-wrap input { width:100%; padding:9px 40px 9px 14px; border-radius:var(--radius); border:1px solid var(--edge); background:rgba(11,13,24,0.6); color:var(--text); transition:border-color var(--dur), box-shadow var(--dur); }
+.search-wrap input { width:100%; padding:9px 14px; border-radius:var(--radius); border:1px solid var(--edge); background:rgba(11,13,24,0.6); color:var(--text); transition:border-color var(--dur), box-shadow var(--dur); }
 .search-wrap input:focus { outline:none; border-color:var(--accent); box-shadow:0 0 0 3px rgba(122,162,247,0.3); }
-.search-go { position:absolute; right:5px; top:50%; transform:translateY(-50%); width:30px; height:30px; display:flex; align-items:center; justify-content:center; padding:0; border:none; background:none; color:var(--muted); cursor:pointer; border-radius:8px; }
-.search-go:hover { color:var(--accent); background:rgba(255,255,255,0.07); }
-.search-go .icon { width:17px; height:17px; }
 
 /* Uniform icon buttons */
 .icon-btn { display:inline-flex; align-items:center; justify-content:center; width:38px; height:38px; padding:0; border:1px solid var(--hairline); border-radius:var(--radius); background:rgba(255,255,255,0.04); color:var(--text); cursor:pointer; transition:background var(--dur), border-color var(--dur), color var(--dur), transform var(--dur-fast); }
@@ -87,7 +84,7 @@ header h1.brand { display:flex; align-items:center; gap:8px; margin:0 6px 0 0; f
 
 .menu { position:relative; }
 .menu-panel { position:absolute; top:calc(100% + 8px); right:0; z-index:30; min-width:230px; max-width:320px; max-height:62vh; overflow-y:auto; padding:8px; display:flex; flex-direction:column; gap:4px;
-  background:var(--panel-glass); -webkit-backdrop-filter:var(--blur); backdrop-filter:var(--blur); border:1px solid var(--hairline); border-radius:var(--radius); box-shadow:var(--shadow-2); }
+  background:rgba(18, 24, 50, 0.97); -webkit-backdrop-filter:var(--blur); backdrop-filter:var(--blur); border:1px solid var(--accent); border-radius:var(--radius); box-shadow:var(--shadow-2); }
 .menu-panel.hidden { display:none; }
 .menu-label { font-size:11px; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); padding:4px 10px 2px; }
 .menu-sep { height:1px; background:var(--hairline); margin:6px 4px; }
@@ -207,6 +204,8 @@ main { position:relative; z-index:2; flex:1; min-height:0; display:flex; justify
 #currentWord, #summary { overflow-wrap:anywhere; }
 #currentWord { margin:2px 0 10px; font-family:var(--font-display); font-size:19px; font-weight:600; }
 .hint { font-size:12px; color:var(--muted); margin-bottom:8px; }
+.hint-coarse { display:none; }
+@media (pointer: coarse) { .hint-fine { display:none; } .hint-coarse { display:inline; } }
 #neighborControls { display:flex; gap:8px; margin:10px 0 8px; }
 #neighborControls:empty { display:none; }
 #neighborControls .nb-filter { flex:1; min-width:0; padding:7px 10px; border-radius:var(--radius-sm); border:1px solid var(--edge); background:rgba(11,13,24,0.6); color:var(--text); font-size:12px; }
@@ -352,9 +351,12 @@ footer { position:relative; z-index:2; padding:7px 16px; border-top:1px solid va
   :root { --footer-h: 26px; --sheet-collapsed-h: 88px; }
 
   header { flex-direction:column; align-items:stretch; padding:8px 12px; gap:8px; }
-  header h1.brand { font-size:17px; margin:0; }
-  .controls { width:100%; min-width:0; gap:8px; }
-  .search-wrap { flex:1 1 100%; max-width:none; }
+  header h1.brand { font-size:17px; margin:0; min-width:0; }
+  .brand-tag { display:inline; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  /* Row 1: search box + its button; Row 2: the action buttons, centred */
+  .controls { width:100%; min-width:0; gap:8px; justify-content:center; }
+  .controls .icon-btn, .controls .menu { flex:0 0 auto; }
+  .search-wrap { flex:1 1 calc(100% - 46px); max-width:none; }
   /* Trim the toolbar so it fits one row: Start over + Help fold into More */
   #resetBtn, #helpBtn { display:none; }
   .mobile-only { display:flex; }
@@ -363,11 +365,13 @@ footer { position:relative; z-index:2; padding:7px 16px; border-top:1px solid va
   .menu-panel { left:10px; right:10px; min-width:0; max-width:none; }
   #breadcrumbs { padding:5px 12px; }
 
-  main { padding:0; }
+  /* Lift the sheet's stacking context above the header so a fully-opened sheet
+     can cover the toolbar/breadcrumbs (you close it to get back to them) */
+  main { padding:0; z-index:25; }
   #info {
     position:fixed; left:0; right:0; bottom:var(--footer-h); top:auto; z-index:20;
     width:auto; max-width:none;
-    height:var(--sheet-h, 48vh); max-height:86vh;
+    height:var(--sheet-h, 48vh); max-height:calc(100dvh - var(--footer-h));
     padding:6px 14px 16px;
     border-radius:var(--radius-lg) var(--radius-lg) 0 0;
     transition:height var(--dur) var(--ease-out);
@@ -388,6 +392,9 @@ footer { position:relative; z-index:2; padding:7px 16px; border-top:1px solid va
     bottom:calc(var(--footer-h) + var(--sheet-collapsed-h) + 8px); }
   body:not(.sheet-collapsed) .map-legend,
   body:not(.sheet-collapsed) .type-legend { opacity:0 !important; pointer-events:none; }
+  /* While actively dragging the sheet, hide the legend instantly (no 0.5s lag) */
+  body.sheet-dragging .map-legend,
+  body.sheet-dragging .type-legend { opacity:0 !important; pointer-events:none; transition:opacity 0.12s; }
 
   /* Tap-a-spoke preview: near-full-width with a small side buffer, plus an X */
   .preview-modal { width:calc(100vw - 24px); max-width:440px; padding:14px; padding-top:18px; }

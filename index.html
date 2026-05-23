@@ -52,8 +52,8 @@
         <div class="search-wrap">
           <input id="search" type="text" placeholder="Search a page…" list="wordlist" />
           <datalist id="wordlist"></datalist>
-          <button id="goBtn" class="search-go" data-tip="Search" aria-label="Search"><svg class="icon"><use href="#ic-search"/></svg></button>
         </div>
+        <button id="goBtn" class="icon-btn" data-tip="Search" aria-label="Search"><svg class="icon"><use href="#ic-search"/></svg></button>
         <button id="randomBtn" class="icon-btn" data-tip="Surprise me" aria-label="Surprise me — random article"><svg class="icon"><use href="#ic-surprise"/></svg></button>
         <button id="pathBtn" class="icon-btn" data-tip="Find path" aria-label="Find a path between two articles"><svg class="icon"><use href="#ic-route"/></svg></button>
         <button id="mapBtn" class="icon-btn" data-tip="Galaxy map" aria-label="Toggle galaxy overview map"><svg class="icon"><use href="#ic-map"/></svg></button>
@@ -118,7 +118,7 @@
         </div>
         <h2 id="currentWord">Select a page</h2>
         <div id="summary"></div>
-        <div class="hint">Hover a ray to see its title; click to travel. Scroll to zoom. Drag to orbit.</div>
+        <div class="hint"><span class="hint-fine">Hover a ray to see its title; click to travel. Scroll to zoom. Drag to orbit.</span><span class="hint-coarse">Tap a spoke to see its name; tap it again to preview. Pinch to zoom. Drag to orbit.</span></div>
         <div id="neighborControls"></div>
         <div id="neighbors"></div>
       </aside>

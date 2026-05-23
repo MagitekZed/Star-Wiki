@@ -229,6 +229,8 @@ const mouse = new THREE.Vector2();
 const mousePx = { x: 0, y: 0 }; // cursor position relative to the canvas, in px
 let hovered = null;
 let previewTarget = null;
+let peekedObject = null;       // touch: the spoke revealed by the previous tap (tap it again to confirm)
+let lastPointerWasTouch = false;
 
 container.addEventListener('mousemove', (e)=>{
   const rect = renderer.domElement.getBoundingClientRect();
@@ -237,22 +239,66 @@ container.addEventListener('mousemove', (e)=>{
   mousePx.x = e.clientX - rect.left;
   mousePx.y = e.clientY - rect.top;
 });
+renderer.domElement.addEventListener('pointerdown', (e)=>{ lastPointerWasTouch = (e.pointerType === 'touch' || e.pointerType === 'pen'); }, true);
+
+// Pick the spoke/star under a screen coord. Used by tap handling so selection
+// never depends on the RAF-driven hover state (which is stale at click time on touch).
+function pickObjectAt(clientX, clientY){
+  const rect = renderer.domElement.getBoundingClientRect();
+  const m = new THREE.Vector2(
+    ((clientX - rect.left) / rect.width) * 2 - 1,
+    -((clientY - rect.top) / rect.height) * 2 + 1
+  );
+  raycaster.setFromCamera(m, camera);
+  const hits = raycaster.intersectObjects([...edgeGroup.children, ...starGroup.children], false);
+  if (!hits.length) return null;
+  const o = hits[0].object;
+  return (o.userData && o.userData.title && o.userData.kind !== 'center') ? o : null;
+}
+
+function confirmTarget(obj, x, y){
+  const toTitle = obj.userData.title;
+  const prev = getChainPrev();
+  if (prev && toTitle === prev && obj.userData.kind === 'ray') goBackOne();
+  else openPreview(toTitle, x, y);
+}
 
 container.addEventListener('click', (e)=>{
   if (isAnimating) return; // ignore clicks during animation
   if (overviewActive) { closeMapNodePopup(); return; } // clicking the void dismisses a node popup
-  if (hovered && hovered.object && hovered.object.userData && hovered.object.userData.title && hovered.object.userData.kind !== 'center') {
-    const toTitle = hovered.object.userData.title;
-    const prev = getChainPrev();
-    if (prev && toTitle === prev && hovered.object.userData.kind === 'ray') {
-      goBackOne();
+  // Anchor hover to the tap point so the title tooltip shows where the finger landed.
+  const rect = renderer.domElement.getBoundingClientRect();
+  mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+  mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+  mousePx.x = e.clientX - rect.left;
+  mousePx.y = e.clientY - rect.top;
+
+  const obj = pickObjectAt(e.clientX, e.clientY);
+  if (lastPointerWasTouch) {
+    // Two-step: first tap peeks the name; tapping the SAME spoke again confirms.
+    // Tapping a different spoke peeks that one; tapping empty space dismisses.
+    if (obj && obj === peekedObject) {
+      peekedObject = null;
+      confirmTarget(obj, e.clientX, e.clientY);
+    } else if (obj) {
+      peekedObject = obj;
     } else {
-      openPreview(toTitle, e.clientX, e.clientY);
+      peekedObject = null;
+      if (previewTarget) closePreview();
     }
-  } else if (previewTarget) {
-    closePreview();
+  } else {
+    // Mouse: a single click travels (hover already revealed the title).
+    if (obj) confirmTarget(obj, e.clientX, e.clientY);
+    else if (previewTarget) closePreview();
   }
 });
+
+// Tell the sheet (on mobile) to collapse so a freshly-drawn cluster is visible.
+function notifyNavigate(){
+  if (window.matchMedia && window.matchMedia('(max-width: 720px)').matches) {
+    window.dispatchEvent(new Event('starwiki:navigate'));
+  }
+}
 
 // ====== Utility ======
 function seededHash(str){
@@ -1384,6 +1430,8 @@ let isAnimating = false;
 let journeyBuilding = false; // true while loadPath builds a multi-stop trail
 async function travelToNeighbor(targetTitle, addToHistory=true){
   if (isAnimating || overviewTransitioning || journeyBuilding || !currentTitle) return;
+  peekedObject = null;
+  notifyNavigate();
   if (overviewActive) teardownOverview(); // any navigation leaves the overview
 
   // Resolve a provisional vector toward the target BEFORE fetch, if possible.
@@ -2100,6 +2148,8 @@ function clearAllScene(){
 function onGo(val){
   const value = val.trim();
   if (!value) return;
+  peekedObject = null;
+  notifyNavigate();
   teardownOverview();
   closePreview();
   const help = document.getElementById('helpModal');
