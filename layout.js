@@ -1,4 +1,4 @@
-import { wikiFetch, getRandomTitle, findPath, fetchDailyFeed } from './wikipedia.js';
+import { wikiFetch, getRandomTitle, findPathBest, fetchDailyFeed } from './wikipedia.js';
 import {
   onGo,
   setShowBacklinks,
@@ -119,7 +119,7 @@ async function runPathFind(){
   pathStatus.textContent = 'Searching…';
   let result;
   try {
-    result = await findPath(from, to, (msg)=>{ if (myId === pathSearchId) pathStatus.textContent = msg; });
+    result = await findPathBest(from, to, (msg)=>{ if (myId === pathSearchId) pathStatus.textContent = msg; });
   } catch {
     result = { status: 'error' };
   }
@@ -127,13 +127,14 @@ async function runPathFind(){
   pathFind.disabled = false;
   if (result.status === 'found') {
     const route = result.path.join('  →  ');
-    pathStatus.innerHTML = `Found: <span class="path-route"></span>`;
+    const via = result.source === 'sdow' ? 'Shortest path' : 'Found';
+    pathStatus.innerHTML = `${via}: <span class="path-route"></span>`;
     pathStatus.querySelector('.path-route').textContent = route;
     setTimeout(()=>{ if (myId === pathSearchId) { closePathModal(); loadPath(result.path); } }, 700);
   } else if (result.status === 'invalid') {
     pathStatus.innerHTML = `<span class="path-miss">Couldn't find one of those articles. Check the spelling.</span>`;
   } else {
-    pathStatus.innerHTML = `<span class="path-miss">No path found within 3 links. They may be far apart — try a broader endpoint.</span>`;
+    pathStatus.innerHTML = `<span class="path-miss">No path found. They may be far apart — try a broader endpoint.</span>`;
   }
 }
 

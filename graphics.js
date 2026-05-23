@@ -57,9 +57,15 @@ composer.addPass(new RenderPass(scene, camera));
 const bloomPass = new UnrealBloomPass(
   new THREE.Vector2(container.clientWidth, container.clientHeight),
   0.9,  // strength
-  0.5,  // radius
+  0.6,  // radius — slightly wider for a smoother falloff at glow edges
   0.1   // threshold — only the bright additive stars/rays bloom
 );
+// Some GL backends don't linear-filter half-float textures, so UnrealBloomPass's
+// upsampled (half-float) mips show a hard texel grid over bright/mid areas. Force
+// the bloom's internal targets to 8-bit, which always filters linearly — the soft
+// additive glow hides any banding, and the main composer buffers stay high-precision.
+[bloomPass.renderTargetBright, ...bloomPass.renderTargetsHorizontal, ...bloomPass.renderTargetsVertical]
+  .forEach(rt => { if (rt && rt.texture) rt.texture.type = THREE.UnsignedByteType; });
 composer.addPass(bloomPass);
 const vignettePass = new ShaderPass(VignetteShader);
 vignettePass.uniforms.offset.value = 1.05;
@@ -97,8 +103,9 @@ window.addEventListener('resize', () => {
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
   renderer.setSize(w, h);
-  composer.setSize(w, h);
-  bloomPass.setSize(w, h);
+  composer.setSize(w, h); // also resizes the bloom pass at the device pixel ratio
+  // (Don't call bloomPass.setSize here — it would override the above back to CSS
+  //  resolution, halving bloom fidelity on retina and making it look blocky.)
   // Fat lines need their resolution kept in sync or their pixel width is wrong.
   scene.traverse(o => { if (o.material && o.material.isLineMaterial) o.material.resolution.set(w, h); });
   updateViewOffset();
@@ -472,7 +479,7 @@ function metricMult(meta){
 // ---- Bloom tween store for cluster expansion
 const _blooms = []; // { mesh, start, delayMs, target }
 
-function placeNeighbor(title, posArray, group = starGroup, map = wordToMesh, meta = null){
+function placeNeighbor(title, posArray, group = starGroup, map = wordToMesh, meta = null, instant = false){
   const isVisited = visited.has(title);
   const baseMat = isVisited
     ? materialVisited
@@ -490,14 +497,19 @@ function placeNeighbor(title, posArray, group = starGroup, map = wordToMesh, met
     twPhase: ((th >> 7) % 628) / 100,        // 0 .. ~2π
     twAmp: 0.07 + (th % 60) / 600            // 0.07 .. 0.17
   };
-  // start tiny; animate to base scale
-  mesh.scale.set(0.001, 0.001, 1);
-  _blooms.push({
-    mesh,
-    start: performance.now(),
-    delayMs: 60 + (seededHash(title) % 180),
-    target: baseScale
-  });
+  if (instant) {
+    // Used when replaying a loaded journey's trail — appear at full size, no scale-in.
+    mesh.scale.set(baseScale, baseScale, 1);
+  } else {
+    // start tiny; animate to base scale
+    mesh.scale.set(0.001, 0.001, 1);
+    _blooms.push({
+      mesh,
+      start: performance.now(),
+      delayMs: 60 + (seededHash(title) % 180),
+      target: baseScale
+    });
+  }
   group.add(mesh);
   map.set(title, mesh);
   return mesh;
@@ -554,7 +566,7 @@ function drawRay(centerTitle, targetTitle, startVec3, endVec3, rank, total, grou
   group.add(dot);
 }
 
-function buildStarInto(centerTitle, data, gStar, gEdge, map, prevTitle=null, prevVec=null){
+function buildStarInto(centerTitle, data, gStar, gEdge, map, prevTitle=null, prevVec=null, instant=false, updateUI=true){
   const centerMesh = new THREE.Sprite(materialCenter.clone());
   centerMesh.position.set(0,0,0);
   centerMesh.scale.setScalar(2);
@@ -589,7 +601,7 @@ function buildStarInto(centerTitle, data, gStar, gEdge, map, prevTitle=null, pre
   const meta = data.metaByTitle || {};
   filtered.forEach((nb, i) => {
     const pos = positionForNeighbor(nb, i, filtered.length);
-    placeNeighbor(nb, pos, gStar, map, meta[nb]);
+    placeNeighbor(nb, pos, gStar, map, meta[nb], instant);
     drawRay(centerTitle, nb, new THREE.Vector3(0,0,0), new THREE.Vector3(pos[0], pos[1], pos[2]), i, filtered.length, gEdge);
   });
 
@@ -597,7 +609,8 @@ function buildStarInto(centerTitle, data, gStar, gEdge, map, prevTitle=null, pre
     drawRay(centerTitle, prevTitle, new THREE.Vector3(0,0,0), prevVec, 0, 1, gEdge, RETURN_COLOR);
   }
 
-  updateSidebar(data.center, filtered, prevTitle, data.metaByTitle);
+  // Trail clusters of a loaded journey skip the sidebar (it shows the destination).
+  if (updateUI) updateSidebar(data.center, filtered, prevTitle, data.metaByTitle);
 }
 
 function rebuildStar(title, addToHistory=true){
@@ -1371,8 +1384,9 @@ function isOverviewActive(){ return overviewActive; }
 
 // ====== Travel ======
 let isAnimating = false;
+let journeyBuilding = false; // true while loadPath builds a multi-stop trail
 async function travelToNeighbor(targetTitle, addToHistory=true){
-  if (isAnimating || overviewTransitioning || !currentTitle) return;
+  if (isAnimating || overviewTransitioning || journeyBuilding || !currentTitle) return;
   if (overviewActive) teardownOverview(); // any navigation leaves the overview
 
   // Resolve a provisional vector toward the target BEFORE fetch, if possible.
@@ -2176,11 +2190,12 @@ function setShowCrossLinks(val){
 
 function getHistory(){ return history.slice(); }
 
-// Restore a multi-step journey (from a shared hash URL or a saved bookmark).
-// Lands on the last title with the full breadcrumb chain intact.
+// Restore a multi-step journey (shared hash / saved bookmark / found path). Lands
+// on the destination immediately, then builds the rest of the trail behind it in
+// the background — as if it had been travelled organically, minus the fly-throughs.
 function loadPath(path){
   if (!Array.isArray(path) || !path.length) return;
-  if (isAnimating) return;
+  if (isAnimating || journeyBuilding) return;
   teardownOverview();
   closePreview();
   const help = document.getElementById('helpModal');
@@ -2191,17 +2206,106 @@ function loadPath(path){
   visited.clear();
   hovered = null;
   tooltip.classList.remove('show');
-  clusterGroups.forEach(g=>{
-    if (g.star !== starGroup) disposeGroup(g.star);
-    if (g.edge !== edgeGroup) disposeGroup(g.edge);
-    scene.remove(g.star); scene.remove(g.edge);
-  });
+  clearCrossLinks();
+  clusterGroups.forEach(g=>{ disposeGroup(g.star); disposeGroup(g.edge); scene.remove(g.star); scene.remove(g.edge); });
+  clusterGroups.clear();
+  centerPositions.clear();
+  journeyPositions.clear();
+  journeyMeta.clear();
+  ghostQueue.length = 0;
+  trailLine.visible = false;
+  // Fresh empty active groups so hover/animate stay valid until the build lands.
+  starGroup = new THREE.Group(); edgeGroup = new THREE.Group();
+  scene.add(starGroup); scene.add(edgeGroup);
+  wordToMesh = new Map();
   history = path.slice();
   historyIndex = history.length - 1;
-  controls.target.set(0,0,0);
+  controls.target.set(0, 0, 0);
   camera.position.copy(DEFAULT_CAM_POS);
   controls.update();
-  rebuildStar(history[historyIndex], false);
+  buildJourneyClusters(path.slice());
+}
+
+async function buildJourneyClusters(titles){
+  const n = titles.length;
+  journeyBuilding = true;
+  setLoading(true);
+  // Forward chain of positions from the origin (same rule as live travel).
+  const pos = [new THREE.Vector3(0, 0, 0)];
+  for (let i = 1; i < n; i++){
+    const d = directionFromTitle(titles[i]);
+    pos[i] = pos[i-1].clone().add(new THREE.Vector3(d[0], d[1], d[2]).normalize().multiplyScalar(SEGMENT_DIST));
+  }
+  const metaOf = s => ({ wikidataId: s.center.wikidataId, length: s.center.length, categories: s.center.categories });
+  const li = n - 1;
+
+  // 1) Destination first, so the user lands there right away.
+  let dest;
+  try { dest = await getPageStar(titles[li], false); }
+  catch { journeyBuilding = false; setLoading(false); showToast('Failed to load path.'); return; }
+  const dCanon = dest.center.title;
+  const dPrev = n > 1 ? titles[li-1] : null;
+  const dPrevVec = n > 1 ? pos[li-1].clone().sub(pos[li]) : null;
+  const dS = new THREE.Group(), dE = new THREE.Group(), dM = new Map();
+  buildStarInto(dCanon, dest, dS, dE, dM, dPrev, dPrevVec, false, true);
+  dS.position.copy(pos[li]); dE.position.copy(pos[li]);
+  scene.add(dS); scene.add(dE);
+  starGroup = dS; edgeGroup = dE; wordToMesh = dM;
+  clusterGroups.set(dCanon, { star: dS, edge: dE });
+  centerPositions.set(dCanon, pos[li].clone());
+  recordJourneyPos(dCanon, pos[li]);
+  journeyMeta.set(dCanon, metaOf(dest));
+  visited.add(dCanon);
+  currentTitle = dCanon;
+  history[li] = dCanon;
+  controls.target.copy(pos[li]);
+  camera.position.copy(pos[li].clone().add(DEFAULT_CAM_POS));
+  controls.update();
+  fadeInGroups();
+  updateBreadcrumbs();
+  applyNeighborTypes(dCanon);
+  renderOnce();
+
+  // 2) Build the rest of the trail behind, nearest-first so the line stays contiguous.
+  for (let i = li - 1; i >= 0; i--){
+    let s;
+    try { s = await getPageStar(titles[i], false); } catch { continue; }
+    const c = s.center.title;
+    const pv = i > 0 ? pos[i-1].clone().sub(pos[i]) : null;
+    const pt = i > 0 ? titles[i-1] : null;
+    const gS = new THREE.Group(), gE = new THREE.Group(), gm = new Map();
+    buildStarInto(c, s, gS, gE, gm, pt, pv, true, false); // instant, no sidebar
+    gS.position.copy(pos[i]); gE.position.copy(pos[i]);
+    scene.add(gS); scene.add(gE);
+    clusterGroups.set(c, { star: gS, edge: gE });
+    centerPositions.set(c, pos[i].clone());
+    recordJourneyPos(c, pos[i]);
+    journeyMeta.set(c, metaOf(s));
+    visited.add(c);
+    history[i] = c;
+    ghostify(c);
+    gS.visible = trailMode; gE.visible = trailMode;
+    ghostQueue.unshift(c); // keep the queue chronological (oldest first)
+    updateTrail();
+    trailLine.visible = trailMode;
+    renderOnce();
+  }
+
+  // Keep only the most recent ghosts (drop the oldest, farthest from the destination).
+  while (ghostQueue.length > MAX_GHOSTS){
+    const old = ghostQueue.shift();
+    const g = clusterGroups.get(old);
+    if (g){ disposeGroup(g.star); disposeGroup(g.edge); scene.remove(g.star); scene.remove(g.edge); clusterGroups.delete(old); centerPositions.delete(old); }
+  }
+
+  journeyBuilding = false;
+  setLoading(false);
+  updateBreadcrumbs();
+  updateTrail();
+  trailLine.visible = trailMode && centerPositions.size > 1;
+  ensureCrossLinks(currentTitle);
+  applyNeighborTypes(currentTitle);
+  renderOnce();
 }
 
 // ====== Animation ======

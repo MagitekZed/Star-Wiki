@@ -417,6 +417,50 @@ async function findPath(fromTitle, toTitle, onProgress = ()=>{}){
   return { status: 'notfound', from, to };
 }
 
+// ===== Deep path finding via Six Degrees of Wikipedia =====
+// Public, CORS-open API backed by a precomputed link graph from the Wikipedia
+// dumps. Returns true shortest path(s) at any depth, instantly. Snapshot data
+// (not live), so we use it first and fall back to the live search below.
+async function findPathSDOW(fromTitle, toTitle){
+  const source = (fromTitle || '').trim();
+  const target = (toTitle || '').trim();
+  if (!source || !target) return { status: 'invalid' };
+  let data;
+  try {
+    const res = await fetch('https://api.sixdegreesofwikipedia.com/paths', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source, target })
+    });
+    if (!res.ok) return { status: 'error' };
+    data = await res.json();
+  } catch {
+    return { status: 'error' };
+  }
+  const paths = Array.isArray(data.paths) ? data.paths : [];
+  const pages = data.pages || {};
+  if (!paths.length) return { status: 'notfound' };
+  const ids = paths[0];
+  const titles = ids.map(id => pages[id] && pages[id].title).filter(Boolean);
+  if (titles.length !== ids.length || titles.length < 1) return { status: 'error' };
+  return { status: 'found', path: titles, source: 'sdow', pathCount: paths.length };
+}
+
+/**
+ * Best-effort path finder: try Six Degrees of Wikipedia (deep, instant, full
+ * graph) first; if it's unavailable or can't resolve the titles, fall back to
+ * the live bidirectional 3-hop search. Result shape matches findPath, plus a
+ * `source` field ('sdow' | 'live').
+ */
+async function findPathBest(fromTitle, toTitle, onProgress = ()=>{}){
+  onProgress('Searching the full Wikipedia graph…');
+  const sdow = await findPathSDOW(fromTitle, toTitle);
+  if (sdow.status === 'found') return sdow;
+  onProgress('Searching live links…');
+  const live = await findPath(fromTitle, toTitle, onProgress);
+  return { ...live, source: 'live' };
+}
+
 // Daily "featured" + "on this day" articles for the first-run launchpad.
 async function fetchDailyFeed(){
   try {
@@ -535,4 +579,4 @@ async function getRandomTitle(){
   }
 }
 
-export { wikiFetch, fetchSummary, getPageStar, getRandomTitle, fetchWikidataFacts, findPath, fetchDailyFeed, fetchCrossLinks, fetchWikidataIds, fetchInstanceTypes, summaryCache, starCache, fetchPageMetaBatch };
+export { wikiFetch, fetchSummary, getPageStar, getRandomTitle, fetchWikidataFacts, findPath, findPathBest, fetchDailyFeed, fetchCrossLinks, fetchWikidataIds, fetchInstanceTypes, summaryCache, starCache, fetchPageMetaBatch };
