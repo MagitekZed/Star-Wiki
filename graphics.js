@@ -223,11 +223,11 @@ const crossLinkMaterial = new LineMaterial({
 // A ">" chevron pointing +x, grayscale so the per-sprite colour tint stays accurate.
 function makeChevronTexture(){
   const size = 64, ctx = Object.assign(document.createElement('canvas'), { width: size, height: size }).getContext('2d');
-  ctx.strokeStyle = '#fff'; ctx.lineWidth = size * 0.15; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = size * 0.095; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
   ctx.beginPath();
-  ctx.moveTo(size * 0.34, size * 0.24);
-  ctx.lineTo(size * 0.70, size * 0.50);
-  ctx.lineTo(size * 0.34, size * 0.76);
+  ctx.moveTo(size * 0.36, size * 0.28);
+  ctx.lineTo(size * 0.68, size * 0.50);
+  ctx.lineTo(size * 0.36, size * 0.72);
   ctx.stroke();
   const tex = new THREE.CanvasTexture(ctx.canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
@@ -1222,7 +1222,7 @@ function updateOverviewChevrons(tMs){
       s.material.rotation = u.pointSign > 0 ? angle : angle + Math.PI;
       // A brightness wave flows across ALL chevrons toward the target / the middle
       // (crests travel source→target in ~2.5s; the chevrons stay visible as the line).
-      const wave = REDUCED ? 0.7 : (0.5 + 0.5 * Math.cos(cyc * (u.flow - tMs / 2500) * TWO_PI));
+      const wave = REDUCED ? 0.7 : (0.5 + 0.5 * Math.cos(cyc * (u.flow - tMs / 3800) * TWO_PI));
       s.material.opacity = reveal * (0.4 + 0.6 * wave);
       const sc = u.baseScale * (1 + 0.2 * wave);
       s.scale.set(sc, sc, 1);
@@ -1280,18 +1280,26 @@ function buildOverviewInterlinks(pairs){
   const titleSet = new Set(overviewNodeSprites.keys());
   // Aggregate directed [from,to] pairs into one entry per unordered pair, keeping
   // which directions exist (a→b and/or b→a). a,b are lexicographic so the key is stable.
+  // Route edges (consecutive stops) are drawn as the solid route line, so exclude
+  // them here — chevrons only mark the OTHER links between your stops.
+  const routeEdges = new Set();
+  for (let i = 0; i + 1 < history.length; i++){
+    const x = history[i], y = history[i + 1];
+    if (x && y && x !== y) routeEdges.add(x < y ? x + '' + y : y + '' + x);
+  }
   const links = new Map();
   for (const [from, to] of (pairs || [])){
     if (from === to || !titleSet.has(from) || !titleSet.has(to)) continue;
     const fwd = from < to;
     const a = fwd ? from : to, b = fwd ? to : from;
     const key = a + '' + b;
+    if (routeEdges.has(key)) continue; // route edge — already drawn as the solid route line
     let e = links.get(key);
     if (!e){ e = { a, b, ab: false, ba: false }; links.set(key, e); }
     if (fwd) e.ab = true; else e.ba = true;
   }
 
-  let count = 0, chevronBudget = 460;
+  let count = 0, chevronBudget = 700;
   for (const e of links.values()){
     if (count >= 120) break;
     const pa = journeyPositions.get(e.a), pb = journeyPositions.get(e.b);
@@ -1316,7 +1324,7 @@ function buildOverviewInterlinks(pairs){
     // at the target. Two-way: each half points away from its node toward the middle.
     const twoWay = e.ab && e.ba;
     const len = pa.distanceTo(pb);
-    const n = Math.max(6, Math.min(28, Math.round(len / 2)));
+    const n = Math.max(12, Math.min(48, Math.round(len)));
     if (chevronBudget <= 0) continue;
     const sprites = [];
     for (let i = 0; i < n && chevronBudget > 0; i++){
@@ -1338,7 +1346,7 @@ function buildOverviewInterlinks(pairs){
       sprites.push(s);
       chevronBudget--;
     }
-    overviewChevrons.push({ sprites, pa, pb, cyc: Math.max(1, Math.min(5, Math.round(n / 3))) });
+    overviewChevrons.push({ sprites, pa, pb, cyc: Math.max(1, Math.min(2, Math.round(n / 18))) });
   }
   overviewChevronsBuiltAt = performance.now();
 }
