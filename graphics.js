@@ -1180,6 +1180,7 @@ function updateOverviewLabels(){
     v.copy(pos).project(camera);
     if (v.z > 1){ el.style.display = 'none'; continue; } // behind the camera
     el.style.display = '';
+    el.classList.toggle('selected', !!panelPreviewTitle && el.dataset.title === panelPreviewTitle);
     el.style.left = (rect.left + (v.x * 0.5 + 0.5) * rect.width) + 'px';
     el.style.top  = (rect.top  + (-v.y * 0.5 + 0.5) * rect.height) + 'px';
   }
@@ -1361,37 +1362,10 @@ function closeMapNodePopup(){
   const p = document.getElementById('mapNodePopup');
   if (p){ p.classList.add('hidden'); p.innerHTML = ''; p.removeAttribute('data-title'); }
 }
-function openMapNodePopup(title){
-  const p = document.getElementById('mapNodePopup');
-  const sprite = overviewNodeSprites.get(title);
-  if (!p || !sprite) return;
-  const isCur = title === currentTitle;
-  // Slim popup: the full info now lives in the panel, so the popup is just actions.
-  p.innerHTML =
-    `<button class="mp-close" aria-label="Close">&times;</button>` +
-    (isCur
-      ? `<div class="mp-here">You are here</div>`
-      : `<button class="mp-travel">Travel here <svg class="icon"><use href="#ic-star"/></svg></button>` +
-        `<div class="mp-actions"><button class="mp-act" data-act="from">Path from</button><button class="mp-act" data-act="to">Path to</button></div>`);
-  p.dataset.title = title;
-  p.classList.remove('hidden');
-  // Position near the node's projected screen point.
-  const rect = renderer.domElement.getBoundingClientRect();
-  const v = sprite.position.clone().project(camera);
-  let x = rect.left + (v.x * 0.5 + 0.5) * rect.width;
-  let y = rect.top + (-v.y * 0.5 + 0.5) * rect.height;
-  const pr = p.getBoundingClientRect();
-  x = Math.min(Math.max(10, x + 14), window.innerWidth - pr.width - 10);
-  y = Math.min(Math.max(10, y + 14), window.innerHeight - pr.height - 10);
-  p.style.left = x + 'px';
-  p.style.top = y + 'px';
-  p.querySelector('.mp-close')?.addEventListener('click', closeMapNodePopup);
-  p.querySelector('.mp-travel')?.addEventListener('click', () => {
-    closeMapNodePopup();
-    const idx = history.lastIndexOf(title);
-    transitionOutOfOverview(() => { if (idx >= 0 && idx !== historyIndex) jumpToBreadcrumb(idx); });
-  });
-  p.querySelectorAll('.mp-act').forEach(b => b.addEventListener('click', () => { closeMapNodePopup(); setPath(b.dataset.act, title); }));
+// Fly from the galaxy map to a node (used by the panel's "Travel here" action).
+function travelToMapNode(title){
+  const idx = history.lastIndexOf(title);
+  transitionOutOfOverview(() => { if (idx >= 0 && idx !== historyIndex) jumpToBreadcrumb(idx); });
 }
 
 function escapeHtml(s){
@@ -1612,10 +1586,10 @@ function toggleOverview(force){
 
 function onOverviewLabelClick(title){
   if (overviewTransitioning) return;
-  // Selecting a node shows its full info in the panel; the popup just offers actions.
+  // Selecting a node shows its full info + actions in the panel (no separate popup,
+  // which would overlap the bottom sheet on mobile). The label highlights as selected.
   if (title === currentTitle) exitPanelPreview(); // back on the current node → restore its panel
   else previewNodeInPanel(title);
-  openMapNodePopup(title);
 }
 
 function isOverviewActive(){ return overviewActive; }
@@ -1792,14 +1766,22 @@ function updateSidebar(center, neighbors, chainPrev, metaByTitle = {}, previewOf
   const summaryDiv = document.getElementById('summary');
   summaryDiv.innerHTML = '';
   if (previewOf){
+    const previewedTitle = center.title;
     const banner = document.createElement('div');
     banner.className = 'preview-banner';
-    banner.appendChild(Object.assign(document.createElement('span'), { textContent: 'Previewing — not your current stop' }));
-    const ret = document.createElement('button');
-    ret.className = 'preview-return';
-    ret.textContent = '← Back to ' + previewOf;
-    ret.addEventListener('click', exitPanelPreview);
-    banner.appendChild(ret);
+    banner.appendChild(Object.assign(document.createElement('span'), { className: 'pb-caption', textContent: 'Previewing — not your current stop' }));
+    const travel = document.createElement('button');
+    travel.className = 'pa-travel';
+    travel.innerHTML = 'Travel here <svg class="icon"><use href="#ic-star"/></svg>';
+    travel.addEventListener('click', ()=> travelToMapNode(previewedTitle));
+    banner.appendChild(travel);
+    const row = document.createElement('div');
+    row.className = 'preview-actions-row';
+    const mk = (label, title, fn)=>{ const b = document.createElement('button'); b.className = 'pa-btn'; b.textContent = label; if (title) b.title = title; b.addEventListener('click', fn); return b; };
+    row.appendChild(mk('Path from', 'Find a path from here', ()=> setPath('from', previewedTitle)));
+    row.appendChild(mk('Path to', 'Find a path to here', ()=> setPath('to', previewedTitle)));
+    row.appendChild(mk('← Back', 'Back to ' + previewOf, exitPanelPreview));
+    banner.appendChild(row);
     summaryDiv.appendChild(banner);
   }
   if (center.thumbnailUrl) {
