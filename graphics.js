@@ -42,6 +42,7 @@ renderer.domElement.addEventListener('wheel', markInteraction, { passive: true }
 controls.addEventListener('start', markInteraction);
 
 // Background starfield for depth
+let nebulaMesh = null; // the skybox sphere; its position tracks the camera each frame
 const bgStars = createBackgroundStars();
 scene.add(bgStars);
 
@@ -58,14 +59,10 @@ const bloomPass = new UnrealBloomPass(
   new THREE.Vector2(container.clientWidth, container.clientHeight),
   0.9,  // strength
   0.6,  // radius — slightly wider for a smoother falloff at glow edges
-  0.1   // threshold — only the bright additive stars/rays bloom
+  0.5   // threshold — only the bright stars/rays bloom; keeps the mid-bright nebula
+        // out of the bloom (otherwise its low-res bloom shows a grid + a hard edge
+        // where its brightness crosses the threshold)
 );
-// Some GL backends don't linear-filter half-float textures, so UnrealBloomPass's
-// upsampled (half-float) mips show a hard texel grid over bright/mid areas. Force
-// the bloom's internal targets to 8-bit, which always filters linearly — the soft
-// additive glow hides any banding, and the main composer buffers stay high-precision.
-[bloomPass.renderTargetBright, ...bloomPass.renderTargetsHorizontal, ...bloomPass.renderTargetsVertical]
-  .forEach(rt => { if (rt && rt.texture) rt.texture.type = THREE.UnsignedByteType; });
 composer.addPass(bloomPass);
 const vignettePass = new ShaderPass(VignetteShader);
 vignettePass.uniforms.offset.value = 1.05;
@@ -2352,6 +2349,9 @@ function animate(){
   // Drift the camera slowly when idle (not mid-travel, no preview/overview open, motion allowed).
   controls.autoRotate = !REDUCED && !isAnimating && !previewTarget && !overviewActive && (performance.now() - lastInteraction > IDLE_MS);
   controls.update();
+  // Keep the nebula skybox centered on the camera so it never magnifies into a grid
+  // / hard edge when you've travelled far from the origin.
+  if (nebulaMesh) nebulaMesh.position.copy(camera.position);
   applyViewOffset();
   if (overviewActive) updateOverviewLabels();
   else updateHover();
@@ -2517,13 +2517,17 @@ function createStarLayer(count, rMin, rMax, size, opacity, rotSpeed){
 
 function createBackgroundStars(){
   const group = new THREE.Group();
-  // Nebula skybox: a soft colored backdrop so the void has depth and color.
+  // Nebula: a true camera-locked skybox (its position tracks the camera each frame
+  // in animate). Centered on the origin it would, once you've travelled far enough
+  // off-centre, bring its near surface close enough to magnify the texture into a
+  // grid with a hard silhouette edge — keeping the camera at its centre avoids that.
   const nebula = new THREE.Mesh(
     new THREE.SphereGeometry(1600, 48, 32),
     new THREE.MeshBasicMaterial({ map: createNebulaTexture(), side: THREE.BackSide, depthWrite: false, depthTest: false })
   );
   nebula.renderOrder = -1;
   nebula.userData.rotSpeed = 0.00004;
+  nebulaMesh = nebula;
   group.add(nebula);
   // Parallax star layers (far/dim/small -> near/bright/large), each drifting slower than the next.
   group.add(createStarLayer(700, 1100, 1500, 1.0, 0.45, 0.00008));
