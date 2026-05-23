@@ -241,8 +241,11 @@ const overviewLineMaterial = new LineMaterial({
   // The route is an overlay: normal (not additive) blending + depthTest off so it
   // stays visible over the bright central nebula glow and isn't occluded by it.
   // Colour matches the "Your route" legend swatch. See visual-hierarchy notes.
-  color: 0x9fb8ff, linewidth: 1.8, transparent: true, opacity: 0.95,
-  blending: THREE.NormalBlending, depthWrite: false, depthTest: false
+  color: 0x9fb8ff, linewidth: 1.6, transparent: true, opacity: 0.95,
+  blending: THREE.NormalBlending, depthWrite: false, depthTest: false,
+  // Dashed so we can "draw on" the constellation when the map opens (dashSize/gapSize
+  // set per-journey in buildOverview; at rest dashOffset=0 leaves it solid).
+  dashed: true, dashScale: 1, dashSize: 1, gapSize: 0, dashOffset: 0
 });
 overviewLineMaterial.resolution.set(container.clientWidth, container.clientHeight);
 
@@ -617,6 +620,7 @@ let overviewNodeSprites = new Map(); // title -> sprite
 let overviewInterlinkLines = [];     // faint links among journey nodes (layer 1, no bloom)
 let overviewChevrons = [];           // [{ sprites, pa, pb }] directional chevrons over each interlink
 let overviewChevronsBuiltAt = 0;
+let routeDrawLen = 0;                 // total length of the journey route line (for the draw-on)
 let overviewRelations = new Map();   // title -> connection degree within the journey
 let overviewTypes = new Map();       // title -> type bucket key
 let overviewDataToken = 0;
@@ -1168,6 +1172,13 @@ function buildOverview(){
     line.computeLineDistances();
     line.raycast = () => {};
     overviewGroup.add(line);
+    // Set up the "draw-on": one long dash spanning the whole route, slid in from the
+    // far end. transitionIntoOverview animates dashOffset → 0 (solid) as the map opens.
+    routeDrawLen = 0;
+    for (let i = 1; i < pts.length; i++) routeDrawLen += pts[i].distanceTo(pts[i-1]);
+    overviewLineMaterial.dashSize = routeDrawLen;
+    overviewLineMaterial.gapSize = routeDrawLen;
+    overviewLineMaterial.dashOffset = REDUCED ? 0 : routeDrawLen;
   }
   scene.add(overviewGroup);
 }
@@ -1194,11 +1205,17 @@ function updateOverviewLabels(){
   if (!overviewActive || !overviewLabelEls.length) return;
   const rect = renderer.domElement.getBoundingClientRect();
   const v = new THREE.Vector3();
+  const camDist = camera.position.distanceTo(controls.target) || 1; // ~ the fit distance
   for (const { el, pos } of overviewLabelEls){
     v.copy(pos).project(camera);
     if (v.z > 1){ el.style.display = 'none'; continue; } // behind the camera
     el.style.display = '';
     el.classList.toggle('selected', !!panelPreviewTitle && el.dataset.title === panelPreviewTitle);
+    // Depth-fade: stops nearer the camera than the fit distance stay bright; farther
+    // ones recede. Subtle when viewed face-on, clearer once you rotate the galaxy.
+    const t = (pos.distanceTo(camera.position) - camDist) / camDist; // <0 nearer, >0 farther
+    el.style.opacity = el.classList.contains('current') ? '1'
+      : Math.max(0.45, Math.min(1, 0.85 - 0.55 * t)).toFixed(2);
     el.style.left = (rect.left + (v.x * 0.5 + 0.5) * rect.width) + 'px';
     el.style.top  = (rect.top  + (-v.y * 0.5 + 0.5) * rect.height) + 'px';
   }
@@ -1590,6 +1607,7 @@ function transitionIntoOverview(){
     clusterGroups.forEach(g => { g.star.visible = false; g.edge.visible = false; });
     trailLine.visible = false;
     ovObjs.forEach(o => { if (o.userData._ovTarget != null){ o.material.opacity = o.userData._ovTarget; delete o.userData._ovTarget; } });
+    overviewLineMaterial.dashOffset = 0; // route fully drawn → solid
     overviewTransitioning = false;
     renderOnce();
   };
@@ -1606,6 +1624,7 @@ function transitionIntoOverview(){
     controls.update();
     live.forEach(o => { o.material.opacity = o.userData._ovBase * (1 - e); });
     ovObjs.forEach(o => { o.material.opacity = o.userData._ovTarget * e; });
+    overviewLineMaterial.dashOffset = routeDrawLen * (1 - e); // draw the route on
     renderOnce();
     if (t < 1) requestAnimationFrame(step); else finish();
   })(performance.now());
@@ -2796,9 +2815,13 @@ function animate(){
         obj.scale.set(s, s, 1);
       }
     });
-    // Parallax: rotate each background layer at its own rate for a sense of depth.
+    // Parallax: rotate each background layer at its own rate for a sense of depth,
+    // and advance the per-point twinkle clock.
+    const twT = performance.now() * 0.001;
     bgStars.children.forEach(layer => {
       if (layer.userData && layer.userData.rotSpeed) layer.rotation.y += layer.userData.rotSpeed;
+      const sh = layer.material && layer.material.userData && layer.material.userData.shader;
+      if (sh) sh.uniforms.uTime.value = twT;
     });
   }
 
@@ -2876,6 +2899,7 @@ function createNebulaTexture(){
 function createStarLayer(count, rMin, rMax, size, opacity, rotSpeed){
   const positions = new Float32Array(count * 3);
   const colors = new Float32Array(count * 3);
+  const tw = new Float32Array(count * 3); // per-point twinkle: [phase, freq, amp]
   const c = new THREE.Color();
   for (let i = 0; i < count; i++) {
     const r = rMin + Math.random() * (rMax - rMin);
@@ -2889,11 +2913,25 @@ function createStarLayer(count, rMin, rMax, size, opacity, rotSpeed){
     else if (roll < 0.32) c.setHSL(0.60, 0.55, 0.85); // blue
     else c.setHSL(0.60, 0.10, 0.96);                  // near-white
     colors[i*3] = c.r; colors[i*3+1] = c.g; colors[i*3+2] = c.b;
+    tw[i*3]   = Math.random() * Math.PI * 2;           // phase
+    tw[i*3+1] = 0.5 + Math.random() * 1.6;             // freq (rad/s-ish)
+    tw[i*3+2] = 0.25 + Math.random() * 0.45;           // amp (depth of twinkle)
   }
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
   geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  geo.setAttribute('aTw', new THREE.Float32BufferAttribute(tw, 3));
   const mat = new THREE.PointsMaterial({ size, sizeAttenuation: true, transparent: true, opacity, depthWrite: false, vertexColors: true });
+  // Per-point twinkle: modulate brightness by sin(time*freq + phase). Done in-shader so
+  // it costs nothing per frame beyond a uniform update.
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.uTime = { value: 0 };
+    mat.userData.shader = shader;
+    shader.vertexShader = ('attribute vec3 aTw;\nuniform float uTime;\nvarying float vTw;\n' + shader.vertexShader)
+      .replace('void main() {', 'void main() {\n vTw = 1.0 - aTw.z + aTw.z * (0.5 + 0.5 * sin(uTime * aTw.y + aTw.x));');
+    shader.fragmentShader = ('varying float vTw;\n' + shader.fragmentShader)
+      .replace('vec4 diffuseColor = vec4( diffuse, opacity );', 'vec4 diffuseColor = vec4( diffuse, opacity * vTw );');
+  };
   const pts = new THREE.Points(geo, mat);
   pts.userData.rotSpeed = rotSpeed;
   return pts;
