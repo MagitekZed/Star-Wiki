@@ -621,6 +621,8 @@ let overviewInterlinkLines = [];     // faint links among journey nodes (layer 1
 let overviewChevrons = [];           // [{ sprites, pa, pb }] directional chevrons over each interlink
 let overviewChevronsBuiltAt = 0;
 let routeDrawLen = 0;                 // total length of the journey route line (for the draw-on)
+let overviewRouteBuiltAt = 0;         // when the current route line was built (drives the draw-on)
+let overviewRouteMat = null;          // the current route line's own (cloned) material
 let overviewRelations = new Map();   // title -> connection degree within the journey
 let overviewTypes = new Map();       // title -> type bucket key
 let overviewDataToken = 0;
@@ -1133,6 +1135,7 @@ function applyStarSizes(){
 // ====== Galaxy overview map ======
 function recordJourneyPos(title, vec){
   if (!title || !vec) return;
+  if (journeyPositions.has(title)) return; // a charted stop keeps its original spot (stable galaxy map)
   journeyPositions.set(title, vec.clone());
   if (journeyPositions.size > 250){
     const first = journeyPositions.keys().next().value;
@@ -1162,23 +1165,32 @@ function buildOverview(){
   const pts = [];
   let last = null;
   history.forEach(t => { const p = journeyPositions.get(t); if (p && t !== last){ pts.push(p); last = t; } });
+  routeDrawLen = 0; // reset; only set below if a route line is actually built
+  overviewRouteMat = null;
   if (pts.length >= 2){
     const arr = [];
     pts.forEach(p => arr.push(p.x, p.y, p.z));
     const geo = new LineGeometry();
     geo.setPositions(arr);
-    overviewLineMaterial.resolution.set(container.clientWidth, container.clientHeight);
-    const line = new Line2(geo, overviewLineMaterial);
+    // Clone the template so the route owns its opacity. The enter/exit fades drive the
+    // material's opacity to 0; a SHARED material would make a rebuilt route inherit
+    // opacity 0 (invisible) on reopen — the cross-links clone for the same reason.
+    const lineMat = overviewLineMaterial.clone();
+    lineMat.opacity = 0.95;
+    lineMat.resolution.set(container.clientWidth, container.clientHeight);
+    const line = new Line2(geo, lineMat);
     line.computeLineDistances();
     line.raycast = () => {};
     overviewGroup.add(line);
-    // Set up the "draw-on": one long dash spanning the whole route, slid in from the
-    // far end. transitionIntoOverview animates dashOffset → 0 (solid) as the map opens.
-    routeDrawLen = 0;
+    // Set up the "draw-on": one long dash spanning the whole route, slid in from the far
+    // end. updateOverviewRoute() (per-frame, clock-driven) animates dashOffset → 0 (solid)
+    // and self-corrects, so it always ends visible regardless of how the map was opened.
     for (let i = 1; i < pts.length; i++) routeDrawLen += pts[i].distanceTo(pts[i-1]);
-    overviewLineMaterial.dashSize = routeDrawLen;
-    overviewLineMaterial.gapSize = routeDrawLen;
-    overviewLineMaterial.dashOffset = REDUCED ? 0 : routeDrawLen;
+    lineMat.dashSize = routeDrawLen;
+    lineMat.gapSize = routeDrawLen;
+    lineMat.dashOffset = REDUCED ? 0 : routeDrawLen;
+    overviewRouteMat = lineMat;
+    overviewRouteBuiltAt = performance.now();
   }
   scene.add(overviewGroup);
 }
@@ -1223,6 +1235,15 @@ function updateOverviewLabels(){
 
 // Per-frame: orient each chevron to its link's on-screen angle (robust to free
 // rotation) and run a bright band along it (source → target, or both halves → middle).
+// Per-frame "draw-on" of the route line: dashOffset slides from full → 0 (solid) over
+// ~900ms after the route is built. Self-correcting (clamps to solid), so it always ends
+// visible regardless of how the map was opened.
+function updateOverviewRoute(tMs){
+  if (!overviewRouteMat || routeDrawLen <= 0) return;
+  const p = REDUCED ? 1 : Math.min(1, (tMs - overviewRouteBuiltAt) / 900);
+  overviewRouteMat.dashOffset = routeDrawLen * (1 - p);
+}
+
 const _chevA = new THREE.Vector3(), _chevB = new THREE.Vector3();
 const TWO_PI = Math.PI * 2;
 function updateOverviewChevrons(tMs){
@@ -1607,7 +1628,6 @@ function transitionIntoOverview(){
     clusterGroups.forEach(g => { g.star.visible = false; g.edge.visible = false; });
     trailLine.visible = false;
     ovObjs.forEach(o => { if (o.userData._ovTarget != null){ o.material.opacity = o.userData._ovTarget; delete o.userData._ovTarget; } });
-    overviewLineMaterial.dashOffset = 0; // route fully drawn → solid
     overviewTransitioning = false;
     renderOnce();
   };
@@ -1624,7 +1644,6 @@ function transitionIntoOverview(){
     controls.update();
     live.forEach(o => { o.material.opacity = o.userData._ovBase * (1 - e); });
     ovObjs.forEach(o => { o.material.opacity = o.userData._ovTarget * e; });
-    overviewLineMaterial.dashOffset = routeDrawLen * (1 - e); // draw the route on
     renderOnce();
     if (t < 1) requestAnimationFrame(step); else finish();
   })(performance.now());
@@ -1753,16 +1772,22 @@ async function travelToNeighbor(targetTitle, addToHistory=true){
   const canonical = star.center.title;
   const fromAbs = from.clone();
   let to;
-  if (trailMode && centerPositions.has(canonical)) {
-    // Rule 1: stable position for previously seen centers
+  // Any stop we've already charted keeps its established position — even if its live
+  // cluster was pruned (MAX_GHOSTS) — so travelling back follows the path instead of
+  // inventing a new one and rearranging the galaxy map. centerPositions is the live
+  // copy; journeyPositions is the authoritative map layout (never overwritten).
+  if (centerPositions.has(canonical)) {
     to = centerPositions.get(canonical).clone();
-    const old = clusterGroups.get(canonical);
-    if (old) { disposeGroup(old.star); disposeGroup(old.edge); scene.remove(old.star); scene.remove(old.edge); clusterGroups.delete(canonical); }
-    const idx = ghostQueue.indexOf(canonical); if (idx !== -1) ghostQueue.splice(idx,1);
+  } else if (journeyPositions.has(canonical)) {
+    to = journeyPositions.get(canonical).clone(); // charted before but pruned from the live view
   } else {
-    // Rule 2: new center placement along the incoming vector at fixed segment distance
+    // Brand-new stop: place it along the incoming vector at a fixed segment distance.
     to = fromAbs.clone().add(provisionalDir.clone().multiplyScalar(SEGMENT_DIST));
   }
+  // Rebuilding this node's cluster fresh, so drop any stale group/ghost for it.
+  const oldGrp = clusterGroups.get(canonical);
+  if (oldGrp) { disposeGroup(oldGrp.star); disposeGroup(oldGrp.edge); scene.remove(oldGrp.star); scene.remove(oldGrp.edge); clusterGroups.delete(canonical); }
+  const gqIdx = ghostQueue.indexOf(canonical); if (gqIdx !== -1) ghostQueue.splice(gqIdx, 1);
 
   if (addToHistory) {
     if (historyIndex < history.length - 1) history = history.slice(0, historyIndex + 1);
@@ -2756,7 +2781,7 @@ function animate(){
   // / hard edge when you've travelled far from the origin.
   if (nebulaMesh) nebulaMesh.position.copy(camera.position);
   applyViewOffset();
-  if (overviewActive){ updateOverviewLabels(); updateOverviewChevrons(performance.now()); }
+  if (overviewActive){ const tNow = performance.now(); updateOverviewLabels(); updateOverviewChevrons(tNow); updateOverviewRoute(tNow); }
   else updateHover();
 
   // scale-in blooms
