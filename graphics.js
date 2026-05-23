@@ -214,8 +214,11 @@ const crossLinkMaterial = new LineMaterial({
 
 // The journey path drawn in galaxy-overview mode (spans the whole session).
 const overviewLineMaterial = new LineMaterial({
-  color: 0x9fb8ff, linewidth: 1.4, transparent: true, opacity: 0.55,
-  blending: THREE.AdditiveBlending, depthWrite: false
+  // The route is an overlay: normal (not additive) blending + depthTest off so it
+  // stays visible over the bright central nebula glow and isn't occluded by it.
+  // Colour matches the "Your route" legend swatch. See visual-hierarchy notes.
+  color: 0x9fb8ff, linewidth: 1.8, transparent: true, opacity: 0.95,
+  blending: THREE.NormalBlending, depthWrite: false, depthTest: false
 });
 overviewLineMaterial.resolution.set(container.clientWidth, container.clientHeight);
 
