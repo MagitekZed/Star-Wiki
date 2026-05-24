@@ -2478,20 +2478,37 @@ async function flyAlongTrail(targetIndex){
   };
 
   const startOffset = camera.position.clone().sub(controls.target.clone());
+  const defaultDist = DEFAULT_CAM_POS.length();
+  const defaultOffset = (startOffset.lengthSq() > 1e-6 ? startOffset.clone().normalize() : DEFAULT_CAM_POS.clone().normalize()).multiplyScalar(defaultDist);
   const hops = pts.length - 1;
-  const duration = REDUCED ? 350 : Math.min(3600, Math.max(1200, 620 * hops));
+  const UP = new THREE.Vector3(0, 1, 0);
+  const FLYBY_TURN = 0.6; // gentle orbital drift (radians): swings out mid-flight, returns by arrival
+  const zoomDur = REDUCED ? 0 : 500;            // settle to a default framing on the current node first
+  const flyDur = REDUCED ? 350 : 2500 * hops;   // ~2.5s per segment, so you fly through instead of zipping
+  const easeInOut = x => x < 0.5 ? 4*x*x*x : 1 - Math.pow(-2*x+2, 3)/2;
   const t0 = performance.now();
   function tick(now){
-    const t = Math.min(1, (now - t0) / duration);
-    const ease = t < 0.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2, 3)/2; // ease across the WHOLE flight
+    const elapsed = now - t0;
+    if (elapsed < zoomDur){
+      // Phase 1: ease to a default viewing distance on the current node (no travel yet).
+      const ze = easeInOut(elapsed / zoomDur);
+      controls.target.copy(fromAbs);
+      camera.position.copy(fromAbs.clone().add(startOffset.clone().lerp(defaultOffset, ze)));
+      renderOnce();
+      requestAnimationFrame(tick);
+      return;
+    }
+    // Phase 2: glide the target along the trail with a slow flyby orbit + dolly for travel feel.
+    const t = Math.min(1, (elapsed - zoomDur) / flyDur);
+    const ease = easeInOut(t);
     const curTarget = posAlong(ease);
     controls.target.copy(curTarget);
-    // Dolly back through the middle of the flight for a sense of travel, settling at both ends.
-    const dolly = REDUCED ? 1 : (1 + 0.18 * Math.sin(ease * Math.PI));
-    camera.position.copy(curTarget.clone().add(startOffset.clone().multiplyScalar(dolly)));
+    const orbit = defaultOffset.clone().applyAxisAngle(UP, FLYBY_TURN * Math.sin(t * Math.PI));
+    const dolly = REDUCED ? 1 : (1 + 0.16 * Math.sin(ease * Math.PI));
+    camera.position.copy(curTarget.clone().add(orbit.multiplyScalar(dolly)));
 
-    const fadeOut = t < 0.35 ? 1 - t / 0.35 : 0;
-    const fadeIn = t > 0.65 ? (t - 0.65) / 0.35 : 0;
+    const fadeOut = t < 0.3 ? 1 - t / 0.3 : 0;
+    const fadeIn = t > 0.7 ? (t - 0.7) / 0.3 : 0;
     starGroup.traverse(o => { if (o.material && 'opacity' in o.material) o.material.opacity = o.userData.baseOpacity * fadeOut; });
     edgeGroup.traverse(o => { if (o.material && 'opacity' in o.material) o.material.opacity = o.userData.baseOpacity * fadeOut; });
     newStar.traverse(o => { if (o.material && 'opacity' in o.material) o.material.opacity = o.userData.baseOpacity * fadeIn; });
