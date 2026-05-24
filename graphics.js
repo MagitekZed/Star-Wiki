@@ -2405,6 +2405,9 @@ function saveSnapshot(){
 }
 
 function jumpToBreadcrumb(index){
+  // On the galaxy map, exit via the smooth fade/zoom transition first (same as tapping a
+  // node + "Travel here"), then run the jump — so the cluster doesn't pop back abruptly.
+  if (overviewActive){ transitionOutOfOverview(() => jumpToBreadcrumb(index)); return; }
   if (index === historyIndex) return;
   if (journeyBuilding) return; // ignore clicks while a path is still laying out its trail
   if (isAnimating) { queueNav({ type:'breadcrumb', index }); return; }
@@ -2488,36 +2491,26 @@ async function flyAlongTrail(targetIndex){
   const defaultOffset = (startOffset.lengthSq() > 1e-6 ? startOffset.clone().normalize() : DEFAULT_CAM_POS.clone().normalize()).multiplyScalar(defaultDist);
   const hops = pts.length - 1;
   const UP = new THREE.Vector3(0, 1, 0);
-  const FLYBY_TURN = 0.6; // gentle orbital drift (radians): swings out mid-flight, returns by arrival
-  // Skip the initial framing zoom when we're already at the default distance (e.g. coming
-  // straight from the galaxy-map transition), so it flows zoom → flight with no pause.
-  const needZoom = startOffset.distanceTo(defaultOffset) > defaultDist * 0.04;
-  const zoomDur = (REDUCED || !needZoom) ? 0 : 500;
+  const FLYBY_TURN = 0.6; // flyby swing (radians): out mid-flight, back by arrival
   const flyDur = REDUCED ? 350 : 2500 * hops;   // ~2.5s per segment, so you fly through instead of zipping
   const easeInOut = x => x < 0.5 ? 4*x*x*x : 1 - Math.pow(-2*x+2, 3)/2;
+  let drift = 0; // continuous idle-rate spin so the end blends into the floating spin
   const t0 = performance.now();
   function tick(now){
-    const elapsed = now - t0;
-    if (elapsed < zoomDur){
-      // Phase 1: ease to a default viewing distance on the current node (no travel yet).
-      const ze = easeInOut(elapsed / zoomDur);
-      controls.target.copy(fromAbs);
-      camera.position.copy(fromAbs.clone().add(startOffset.clone().lerp(defaultOffset, ze)));
-      renderOnce();
-      requestAnimationFrame(tick);
-      return;
-    }
-    // Phase 2: glide along the curved trail with a flyby orbit + a breathing zoom
-    // (overall pull-back plus a few gentle in/out cycles) for a dynamic fly-through.
-    const t = Math.min(1, (elapsed - zoomDur) / flyDur);
+    const t = Math.min(1, (now - t0) / flyDur);
     const ease = easeInOut(t);
     const curTarget = posAlong(ease);
     controls.target.copy(curTarget);
-    // Orbit + breathing zoom both keyed off `ease`, so velocity decays to ~0 at arrival
-    // and hands off smoothly to the idle floating spin (same vertical axis).
-    const orbit = defaultOffset.clone().applyAxisAngle(UP, FLYBY_TURN * Math.sin(ease * Math.PI));
+    // One continuous motion: the framing zoom blends in over the first ~30% *concurrently*
+    // with the move (no "zoom, stop, then fly"); a no-op when already at the default framing
+    // (coming from the map). A continuous idle-rate drift runs the whole flight while the
+    // flyby swing decays to 0, so the end velocity equals the idle spin → seamless handoff.
+    if (!REDUCED) drift += 0.0006;
+    const baseOff = startOffset.clone().lerp(defaultOffset, easeInOut(Math.min(1, t / 0.3)));
+    const swing = FLYBY_TURN * Math.sin(ease * Math.PI);
+    const rotated = baseOff.applyAxisAngle(UP, drift + swing);
     const dolly = REDUCED ? 1 : (1 + 0.18 * Math.sin(ease * Math.PI) + 0.14 * Math.sin(ease * Math.PI * 3));
-    camera.position.copy(curTarget.clone().add(orbit.multiplyScalar(dolly)));
+    camera.position.copy(curTarget.clone().add(rotated.multiplyScalar(dolly)));
 
     // Fade the departed cluster out by how far the camera has pulled away from it, down to
     // the dim distant-node standard (matches a ghost), keeping its effects until it's far.
@@ -2560,6 +2553,9 @@ async function flyAlongTrail(targetIndex){
       hovered = null;
       tooltip.classList.remove('show');
       isAnimating = false;
+      // Engage the idle floating spin immediately so it continues the flight's ending
+      // drift with no stop (the flight ends rotating at the idle rate around the same axis).
+      lastInteraction = performance.now() - IDLE_MS - 1;
       ensureCrossLinks(currentTitle);
       applyNeighborTypes(currentTitle);
       flushQueuedActions();
