@@ -180,11 +180,14 @@ const materialVisited = new THREE.SpriteMaterial({
   transparent: true,
   depthWrite: false
 });
+// Walk-relative spoke colours, used on every map (see walkSpokesFor / takenEdges):
+//   RETURN_COLOR (red)  = back, the stop the Back/Left button takes you to (history[i-1])
+//   FORWARD_COLOR (green) = forward, where Forward/Right takes you (history[i+1])
+//   GOLD_COLOR (gold)   = a parked branch — another page you've visited from here
+// Any of these that is an already-charted node has its spoke aimed at its real position.
 const RETURN_COLOR = 0xf7768e;
-// Colour for "on your path" links — the next/prev stop of a found path, forced into
-// the displayed neighbours so the route stays clickable even when those links rank
-// outside the top 20 (see pathRoute / pathForward / pathBack).
-const PATH_LINK_COLOR = 0x9ece6a;
+const FORWARD_COLOR = 0x9ece6a;
+const GOLD_COLOR = 0xe0af68;
 const materialRayHover = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 1, linewidth: 2, depthWrite: false });
 
 // Shared materials that must never be disposed when tearing down a group
@@ -598,10 +601,10 @@ function updateTrail(){
 let currentTitle = null;
 let history = [];
 let historyIndex = -1;
-// Ordered (canonical) titles of the active "found path", set by loadPath and cleared
-// on a fresh start (search/random/reset). Used to inject each stop's adjacent path
-// hops into its displayed neighbours so the route stays clickable along the stars.
-let pathRoute = [];
+// Branch memory: page -> Set of pages you've navigated to from it. Records every hop,
+// never truncated; cleared only on a fresh start (search/random/reset/loadPath). Drives
+// the gold "parked branch" spokes (and, later, the galaxy-map graph edges).
+const takenEdges = new Map();
 const visited = new Set();
 let wordToMesh = new Map();
 let showBacklinks = false;
@@ -702,18 +705,21 @@ function getChainPrev(){
   return historyIndex > 0 ? history[historyIndex - 1] : null;
 }
 
-// Oriented neighbours on the active found path, by the route's fixed source→destination
-// direction (not by how you happened to arrive). The forward hop is drawn green, the
-// back hop red, so the route always reads the same: green = onward, red = toward start.
-function pathForward(title){
-  if (!pathRoute.length || !title) return null;
-  const i = pathRoute.indexOf(title);
-  return (i !== -1 && i < pathRoute.length - 1) ? pathRoute[i + 1] : null;
+// Walk-relative spokes for the page at history index `i`: where Back/Left goes (red),
+// where Forward/Right goes (green), and any other pages visited from here (gold branches).
+// Position-based so it's consistent in both directions and handles a page visited twice.
+function walkSpokesFor(i, title){
+  const back = (i > 0) ? history[i - 1] : null;
+  const fwd  = (i >= 0 && i < history.length - 1) ? history[i + 1] : null;
+  const gold = [];
+  const taken = takenEdges.get(title);
+  if (taken) for (const t of taken){ if (t && t !== back && t !== fwd && t !== title) gold.push(t); }
+  return { back, fwd, gold };
 }
-function pathBack(title){
-  if (!pathRoute.length || !title) return null;
-  const i = pathRoute.indexOf(title);
-  return i > 0 ? pathRoute[i - 1] : null;
+function recordEdge(from, to){
+  if (!from || !to || from === to) return;
+  if (!takenEdges.has(from)) takenEdges.set(from, new Set());
+  takenEdges.get(from).add(to);
 }
 
 function goBackOne(){
@@ -853,7 +859,7 @@ function drawRay(centerTitle, targetTitle, startVec3, endVec3, rank, total, grou
   group.add(dot);
 }
 
-function buildStarInto(centerTitle, data, gStar, gEdge, map, prevTitle=null, prevVec=null, instant=false, updateUI=true){
+function buildStarInto(centerTitle, data, gStar, gEdge, map, atIndex=-1, centerPos=null, instant=false, updateUI=true){
   const centerMesh = new THREE.Sprite(materialCenter.clone());
   centerMesh.position.set(0,0,0);
   centerMesh.scale.setScalar(2);
@@ -883,34 +889,41 @@ function buildStarInto(centerTitle, data, gStar, gEdge, map, prevTitle=null, pre
   gStar.add(corona);
 
   const neighbors = data.neighbors.slice(0,20);
-  const filtered = prevTitle ? neighbors.filter(nb => nb !== prevTitle) : neighbors;
 
-  // Path injection (Option 1), oriented by the route's fixed direction: the forward hop
-  // (toward the destination) is forced in as a GREEN link, the back hop (toward the
-  // source) as RED — so the route always reads the same regardless of how you arrived.
-  // The hop you actually came from (prevTitle) is the return ray, recoloured to match.
-  const fwdHop = pathForward(centerTitle);
-  const backHop = pathBack(centerTitle);
-  const pathColorOf = t => (t && t === fwdHop) ? PATH_LINK_COLOR : ((t && t === backHop) ? RETURN_COLOR : null);
-  const displayNeighbors = filtered.slice();
-  [fwdHop, backHop].forEach(t => { if (t && t !== prevTitle && !displayNeighbors.includes(t)) displayNeighbors.push(t); });
+  // Walk-relative spokes (back/forward/gold) — shown on every map, not just pathfinder
+  // ones. back = where Back/Left goes (red), fwd = where Forward/Right goes (green),
+  // gold = other pages visited from here (parked branches). Each is forced in even if it
+  // isn't a top-20 link; and if it's an already-charted node its spoke is aimed at its
+  // REAL charted position (relative), so it points where you'll actually fly.
+  const { back, fwd, gold } = walkSpokesFor(atIndex, centerTitle);
+  const goldSet = new Set(gold);
+  const colorOf = t => t === back ? RETURN_COLOR : (t === fwd ? FORWARD_COLOR : (goldSet.has(t) ? GOLD_COLOR : null));
 
-  const meta = data.metaByTitle || {};
-  displayNeighbors.forEach((nb, i) => {
-    const col = pathColorOf(nb);
-    const pos = positionForNeighbor(nb, i, displayNeighbors.length);
-    placeNeighbor(nb, pos, gStar, map, meta[nb], instant, col);
-    drawRay(centerTitle, nb, new THREE.Vector3(0,0,0), new THREE.Vector3(pos[0], pos[1], pos[2]), i, displayNeighbors.length, gEdge, col);
-  });
+  // A charted node points at its real relative position; an unvisited link gets the usual
+  // seeded radial spot.
+  const spokePos = (nb, i, total) => {
+    const cp = centerPositions.get(nb) || journeyPositions.get(nb);
+    if (cp && centerPos){ const r = cp.clone().sub(centerPos); return [r.x, r.y, r.z]; }
+    return positionForNeighbor(nb, i, total);
+  };
+  const drawSpoke = (nb, i, total) => {
+    const col = colorOf(nb);
+    const pos = spokePos(nb, i, total);
+    placeNeighbor(nb, pos, gStar, map, (data.metaByTitle || {})[nb], instant, col);
+    drawRay(centerTitle, nb, new THREE.Vector3(0,0,0), new THREE.Vector3(pos[0], pos[1], pos[2]), i, total, gEdge, col);
+  };
 
-  // Return ray to the stop you came from. On a route it's coloured by orientation
-  // (green if it's the forward hop, red if back/off-route), so green always = onward.
-  if (prevTitle && prevVec) {
-    drawRay(centerTitle, prevTitle, new THREE.Vector3(0,0,0), prevVec, 0, 1, gEdge, pathColorOf(prevTitle) || RETURN_COLOR);
-  }
+  // back is its own red spoke + the sidebar "Back to…" row, so keep it out of the list.
+  // fwd + gold lead the list (forced in, coloured); then the normal top-20.
+  const special = new Set([back, fwd, ...gold].filter(Boolean));
+  const list = [fwd, ...gold].filter(Boolean);
+  for (const nb of neighbors) if (!special.has(nb)) list.push(nb);
+
+  list.forEach((nb, i) => drawSpoke(nb, i, list.length));
+  if (back) drawSpoke(back, 0, 1);
 
   // Trail clusters of a loaded journey skip the sidebar (it shows the destination).
-  if (updateUI) updateSidebar(data.center, displayNeighbors, prevTitle, data.metaByTitle);
+  if (updateUI) updateSidebar(data.center, list, back, data.metaByTitle, null, { fwd, goldSet });
 }
 
 function rebuildStar(title, addToHistory=true){
@@ -943,14 +956,11 @@ function rebuildStar(title, addToHistory=true){
     journeyPositions.clear();
     journeyMeta.clear();
     trailLine.visible = false;
-    buildStarInto(canonical, star, starGroup, edgeGroup, wordToMesh);
-    clusterGroups.set(canonical, { star: starGroup, edge: edgeGroup });
     centerPositions.set(canonical, new THREE.Vector3(0,0,0));
     recordJourneyPos(canonical, new THREE.Vector3(0,0,0));
-    journeyMeta.set(canonical, { wikidataId: star.center.wikidataId, length: star.center.length, categories: star.center.categories });
-    // Restored a multi-stop history (shared link / saved journey)? Lay the earlier
-    // stops out as a chain behind the current node, using the same incoming-vector
-    // rule as live travel, so the galaxy map is usable before any new navigation.
+    // Restored a multi-stop history (shared link / saved journey)? Lay the earlier stops
+    // out as a chain behind the current node FIRST, so the back spoke can aim at the real
+    // charted spot (and the galaxy map is usable before any new navigation).
     if (history.length > 1 && historyIndex === history.length - 1){
       let p = new THREE.Vector3(0, 0, 0);
       for (let i = history.length - 1; i > 0; i--){
@@ -959,6 +969,9 @@ function rebuildStar(title, addToHistory=true){
         recordJourneyPos(history[i - 1], p);
       }
     }
+    buildStarInto(canonical, star, starGroup, edgeGroup, wordToMesh, historyIndex, new THREE.Vector3(0,0,0));
+    clusterGroups.set(canonical, { star: starGroup, edge: edgeGroup });
+    journeyMeta.set(canonical, { wikidataId: star.center.wikidataId, length: star.center.length, categories: star.center.categories });
     currentTitle = canonical;
     controls.target.copy(new THREE.Vector3(0,0,0));
     fadeInGroups();
@@ -989,11 +1002,7 @@ async function refreshCurrentNeighbors(){
   }
   setLoading(false);
 
-  const prevTitle = getChainPrev();
   const pos = centerPositions.get(currentTitle) || new THREE.Vector3(0,0,0);
-  const prevVec = prevTitle && centerPositions.has(prevTitle)
-    ? centerPositions.get(prevTitle).clone().sub(pos)
-    : null;
 
   disposeGroup(starGroup);
   disposeGroup(edgeGroup);
@@ -1004,7 +1013,7 @@ async function refreshCurrentNeighbors(){
   const newStar = new THREE.Group();
   const newEdge = new THREE.Group();
   const newMap = new Map();
-  buildStarInto(currentTitle, star, newStar, newEdge, newMap, prevTitle, prevVec);
+  buildStarInto(currentTitle, star, newStar, newEdge, newMap, historyIndex, pos);
   newStar.position.copy(pos);
   newEdge.position.copy(pos);
   scene.add(newStar);
@@ -1125,7 +1134,7 @@ function recolorRaysByType(){
   edgeGroup.children.forEach(obj => {
     const ud = obj.userData;
     if (!ud) return;
-    if (ud.kind === 'ray' && ud.title && ud.baseColorHex !== RETURN_COLOR && ud.baseColorHex !== PATH_LINK_COLOR){
+    if (ud.kind === 'ray' && ud.title && ud.baseColorHex !== RETURN_COLOR && ud.baseColorHex !== FORWARD_COLOR && ud.baseColorHex !== GOLD_COLOR){
       const bucket = neighborTypeCache.get(ud.title);
       if (!bucket || !obj.geometry || !obj.geometry.setColors) return;
       const start = new THREE.Color(ud.baseColorHex);
@@ -1776,6 +1785,7 @@ async function travelToNeighbor(targetTitle, addToHistory=true){
   notifyNavigate();
   if (overviewActive) teardownOverview(); // any navigation leaves the overview
 
+  const fromTitle = currentTitle; // record the edge we're about to traverse (for gold branches)
   // Resolve a provisional vector toward the target BEFORE fetch, if possible.
   const from = centerPositions.get(currentTitle) || new THREE.Vector3(0,0,0);
   const hasAbsoluteTarget = centerPositions.has(targetTitle);
@@ -1841,8 +1851,7 @@ async function travelToNeighbor(targetTitle, addToHistory=true){
   const newStar = new THREE.Group();
   const newEdge = new THREE.Group();
   const newMap = new Map();
-  // prevVec = prev - current (center-to-center red edge)
-  buildStarInto(canonical, star, newStar, newEdge, newMap, currentTitle, fromAbs.clone().sub(to));
+  buildStarInto(canonical, star, newStar, newEdge, newMap, historyIndex, to);
   newStar.position.copy(to);
   newEdge.position.copy(to);
   scene.add(newStar);
@@ -1901,6 +1910,7 @@ async function travelToNeighbor(targetTitle, addToHistory=true){
       edgeGroup = newEdge;
       wordToMesh = newMap;
       currentTitle = star.center.title;
+      recordEdge(fromTitle, currentTitle); // remember this hop for gold branch spokes
       clusterGroups.set(currentTitle, { star: starGroup, edge: edgeGroup });
       centerPositions.set(currentTitle, to.clone());
       recordJourneyPos(currentTitle, to);
@@ -1938,7 +1948,7 @@ let panelPreviewTitle = null;
 let savedSidebar = null;
 let lastSidebar = null;
 
-function updateSidebar(center, neighbors, chainPrev, metaByTitle = {}, previewOf = null){
+function updateSidebar(center, neighbors, chainPrev, metaByTitle = {}, previewOf = null, walk = null){
   const token = ++sidebarToken;
   const info = document.getElementById('info');
   if (info){ info.classList.remove('empty'); info.classList.toggle('previewing', !!previewOf); info.scrollTop = 0; }
@@ -2005,12 +2015,12 @@ function updateSidebar(center, neighbors, chainPrev, metaByTitle = {}, previewOf
   currentNeighbors = neighbors.slice();
   currentChainPrev = chainPrev || null;
   currentMeta = metaByTitle || {};
-  // Path hops for the page being rendered (not while previewing another node).
+  // Walk spokes to badge/pin in the list (not while previewing another node): the
+  // forward stop (green) and any parked branches (gold). Back is the "Back to…" row.
   currentPathLinks = new Map();
-  if (!previewOf) {
-    const fwd = pathForward(center.title), back = pathBack(center.title);
-    if (fwd) currentPathLinks.set(fwd, 'fwd');
-    if (back) currentPathLinks.set(back, 'back');
+  if (!previewOf && walk) {
+    if (walk.fwd) currentPathLinks.set(walk.fwd, 'fwd');
+    if (walk.goldSet) for (const g of walk.goldSet) currentPathLinks.set(g, 'gold');
   }
   neighborFilter = '';
 
@@ -2121,15 +2131,15 @@ function renderNeighborList(animateIn = false){
     list.sort((a, b) => ((currentMeta[b] && currentMeta[b].length) || 0) - ((currentMeta[a] && currentMeta[a].length) || 0));
   }
 
-  // "On your path" hops (forward/back stops of an active found path) get pinned to the
-  // top — forward (green) first, then back (red) — and badged in their route colour.
+  // Walk spokes get pinned to the top — forward (green) first, then parked branches
+  // (gold) — and badged in their colour. (Back is the separate "Back to…" row.)
   // Captured per-render in updateSidebar; empty while previewing another node.
   const pathSet = currentPathLinks;
   if (pathSet.size) {
     const fwd = list.filter(t => pathSet.get(t) === 'fwd');
-    const back = list.filter(t => pathSet.get(t) === 'back');
+    const gold = list.filter(t => pathSet.get(t) === 'gold');
     const rest = list.filter(t => !pathSet.has(t));
-    list = [...fwd, ...back, ...rest];
+    list = [...fwd, ...gold, ...rest];
   }
 
   list.forEach((nb, i) => {
@@ -2140,9 +2150,9 @@ function renderNeighborList(animateIn = false){
       row.style.animationDelay = (i * 28) + 'ms';
     }
     if (visited.has(nb)) row.classList.add('visited');
-    const pathRole = pathSet.get(nb); // 'fwd' | 'back' | undefined
+    const pathRole = pathSet.get(nb); // 'fwd' | 'gold' | undefined
     if (pathRole === 'fwd') row.classList.add('on-path');
-    else if (pathRole === 'back') row.classList.add('on-path-back');
+    else if (pathRole === 'gold') row.classList.add('on-path-gold');
     if (panelPreviewTitle) {
       // Preview mode: neighbours are informational only (this isn't your current page).
       row.classList.add('noclick');
@@ -2166,8 +2176,8 @@ function renderNeighborList(animateIn = false){
     meta.appendChild(titleDiv);
     if (pathRole) {
       const badge = document.createElement('span');
-      badge.className = 'nb-path-badge' + (pathRole === 'back' ? ' back' : '');
-      badge.textContent = 'On your path';
+      badge.className = 'nb-path-badge' + (pathRole === 'gold' ? ' gold' : '');
+      badge.textContent = pathRole === 'gold' ? 'Branch' : 'On your path';
       meta.appendChild(badge);
     }
     const extractDiv = document.createElement('div');
@@ -2454,9 +2464,7 @@ async function flyAlongTrail(targetIndex){
   history[targetIndex] = canonical;
 
   const newStar = new THREE.Group(), newEdge = new THREE.Group(), newMap = new Map();
-  const prevForTarget = history[targetIndex - step];
-  const prevPos = prevForTarget ? posOf(prevForTarget) : null;
-  buildStarInto(canonical, star, newStar, newEdge, newMap, prevForTarget || null, prevPos ? prevPos.clone().sub(to) : null);
+  buildStarInto(canonical, star, newStar, newEdge, newMap, targetIndex, to);
   newStar.position.copy(to); newEdge.position.copy(to);
   scene.add(newStar); scene.add(newEdge);
 
@@ -2755,7 +2763,7 @@ function onGo(val){
   starCache.clear();
   summaryCache.clear();
   visited.clear();
-  pathRoute = []; // leaving any found path; stop injecting its hops
+  takenEdges.clear(); // fresh start — forget branch memory
   history = [];
   historyIndex = -1;
   updateBreadcrumbs();
@@ -2779,7 +2787,7 @@ function resetToWelcome(){
   clearAllScene();
   currentTitle = null;
   history = [];
-  pathRoute = [];
+  takenEdges.clear();
   historyIndex = -1;
   visited.clear();
   showBacklinks = false;
@@ -2866,7 +2874,7 @@ function loadPath(path){
   scene.add(starGroup); scene.add(edgeGroup);
   wordToMesh = new Map();
   history = path.slice();
-  pathRoute = path.slice(); // the active route; canonicalized per-stop as it builds
+  takenEdges.clear(); // the path lives in history; branch memory starts empty
   historyIndex = history.length - 1;
   controls.target.set(0, 0, 0);
   camera.position.copy(DEFAULT_CAM_POS);
@@ -2892,11 +2900,9 @@ async function buildJourneyClusters(titles){
   try { dest = await getPageStar(titles[li], false); }
   catch { journeyBuilding = false; setLoading(false); showToast('Failed to load path.'); return; }
   const dCanon = dest.center.title;
-  pathRoute[li] = dCanon; // keep the route in canonical titles to match centerTitle
-  const dPrev = n > 1 ? titles[li-1] : null;
-  const dPrevVec = n > 1 ? pos[li-1].clone().sub(pos[li]) : null;
+  history[li] = dCanon;
   const dS = new THREE.Group(), dE = new THREE.Group(), dM = new Map();
-  buildStarInto(dCanon, dest, dS, dE, dM, dPrev, dPrevVec, false, true);
+  buildStarInto(dCanon, dest, dS, dE, dM, li, pos[li], false, true);
   dS.position.copy(pos[li]); dE.position.copy(pos[li]);
   scene.add(dS); scene.add(dE);
   starGroup = dS; edgeGroup = dE; wordToMesh = dM;
@@ -2906,7 +2912,6 @@ async function buildJourneyClusters(titles){
   journeyMeta.set(dCanon, metaOf(dest));
   visited.add(dCanon);
   currentTitle = dCanon;
-  history[li] = dCanon;
   controls.target.copy(pos[li]);
   camera.position.copy(pos[li].clone().add(DEFAULT_CAM_POS));
   controls.update();
@@ -2920,11 +2925,9 @@ async function buildJourneyClusters(titles){
     let s;
     try { s = await getPageStar(titles[i], false); } catch { continue; }
     const c = s.center.title;
-    pathRoute[i] = c; // canonical title for this stop (enables next-hop injection)
-    const pv = i > 0 ? pos[i-1].clone().sub(pos[i]) : null;
-    const pt = i > 0 ? titles[i-1] : null;
+    history[i] = c;
     const gS = new THREE.Group(), gE = new THREE.Group(), gm = new Map();
-    buildStarInto(c, s, gS, gE, gm, pt, pv, true, false); // instant, no sidebar
+    buildStarInto(c, s, gS, gE, gm, i, pos[i], true, false); // instant, no sidebar
     gS.position.copy(pos[i]); gE.position.copy(pos[i]);
     scene.add(gS); scene.add(gE);
     clusterGroups.set(c, { star: gS, edge: gE });
@@ -2932,7 +2935,6 @@ async function buildJourneyClusters(titles){
     recordJourneyPos(c, pos[i]);
     journeyMeta.set(c, metaOf(s));
     visited.add(c);
-    history[i] = c;
     ghostify(c);
     gS.visible = trailMode; gE.visible = trailMode;
     ghostQueue.unshift(c); // keep the queue chronological (oldest first)
