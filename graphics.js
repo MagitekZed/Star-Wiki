@@ -1723,7 +1723,7 @@ function transitionOutOfOverview(onDone){
   const view = currentNodeCameraView();
   const sT = controls.target.clone();
   const sC = camera.position.clone();
-  const dur = REDUCED ? 0 : 700;
+  const dur = REDUCED ? 0 : 1400; // ~half-speed zoom back in, with a gentler cluster fade-in
   const myId = ++overviewFadeId;
 
   const finish = () => {
@@ -2468,22 +2468,17 @@ async function flyAlongTrail(targetIndex){
   newStar.position.copy(to); newEdge.position.copy(to);
   scene.add(newStar); scene.add(newEdge);
 
-  // Crossfade: current fades as we leave, target fades in as we arrive; the trail
-  // we fly past stays at full opacity in between.
+  // The cluster we're leaving becomes a dim ghost right away and stays visible as we fly
+  // past it (no fade-out then end-pop); only the incoming target fades in on arrival.
   const armFade = g => g.traverse(o => { if (o.material && 'opacity' in o.material){ o.userData.baseOpacity = o.material.opacity; o.material.opacity = 0; o.material.transparent = true; }});
-  const noteOpacity = g => g.traverse(o => { if (o.material && 'opacity' in o.material){ o.userData.baseOpacity = o.material.opacity; }});
-  armFade(newStar); armFade(newEdge); noteOpacity(starGroup); noteOpacity(edgeGroup);
+  armFade(newStar); armFade(newEdge);
+  ghostify(startCurrent);
+  { const sg = clusterGroups.get(startCurrent); if (sg){ sg.star.visible = trailMode; sg.edge.visible = trailMode; } }
 
-  // Arc-length parametrisation so speed is even along the whole polyline.
-  const segLen = []; let total = 0;
-  for (let i = 1; i < pts.length; i++){ const d = pts[i].distanceTo(pts[i-1]); segLen.push(d); total += d; }
-  const posAlong = e => {
-    if (total <= 0) return pts[pts.length-1].clone();
-    let d = e * total, i = 0;
-    while (i < segLen.length - 1 && d > segLen[i]){ d -= segLen[i]; i++; }
-    const f = segLen[i] > 0 ? Math.min(1, d / segLen[i]) : 1;
-    return pts[i].clone().lerp(pts[i+1], f);
-  };
+  // Smooth curve through the waypoints (centripetal Catmull-Rom) so corners round off
+  // instead of hard angles; getPointAt() gives even speed along the curve.
+  const curve = pts.length >= 2 ? new THREE.CatmullRomCurve3(pts, false, 'centripetal', 0.5) : null;
+  const posAlong = e => curve ? curve.getPointAt(Math.min(1, Math.max(0, e))) : pts[pts.length-1].clone();
 
   const startOffset = camera.position.clone().sub(controls.target.clone());
   const defaultDist = DEFAULT_CAM_POS.length();
@@ -2506,19 +2501,18 @@ async function flyAlongTrail(targetIndex){
       requestAnimationFrame(tick);
       return;
     }
-    // Phase 2: glide the target along the trail with a slow flyby orbit + dolly for travel feel.
+    // Phase 2: glide along the curved trail with a flyby orbit + a breathing zoom
+    // (overall pull-back plus a few gentle in/out cycles) for a dynamic fly-through.
     const t = Math.min(1, (elapsed - zoomDur) / flyDur);
     const ease = easeInOut(t);
     const curTarget = posAlong(ease);
     controls.target.copy(curTarget);
     const orbit = defaultOffset.clone().applyAxisAngle(UP, FLYBY_TURN * Math.sin(t * Math.PI));
-    const dolly = REDUCED ? 1 : (1 + 0.16 * Math.sin(ease * Math.PI));
+    const dolly = REDUCED ? 1 : (1 + 0.18 * Math.sin(ease * Math.PI) + 0.14 * Math.sin(ease * Math.PI * 3));
     camera.position.copy(curTarget.clone().add(orbit.multiplyScalar(dolly)));
 
-    const fadeOut = t < 0.3 ? 1 - t / 0.3 : 0;
-    const fadeIn = t > 0.7 ? (t - 0.7) / 0.3 : 0;
-    starGroup.traverse(o => { if (o.material && 'opacity' in o.material) o.material.opacity = o.userData.baseOpacity * fadeOut; });
-    edgeGroup.traverse(o => { if (o.material && 'opacity' in o.material) o.material.opacity = o.userData.baseOpacity * fadeOut; });
+    // The departed cluster is already a ghost; only fade the incoming target in on arrival.
+    const fadeIn = t > 0.65 ? (t - 0.65) / 0.35 : 0;
     newStar.traverse(o => { if (o.material && 'opacity' in o.material) o.material.opacity = o.userData.baseOpacity * fadeIn; });
     newEdge.traverse(o => { if (o.material && 'opacity' in o.material) o.material.opacity = o.userData.baseOpacity * fadeIn; });
 
