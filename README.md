@@ -80,15 +80,6 @@ A static site, no build step. Three.js is loaded from a CDN via an import map.
 | `graphics.js` | Three.js scene, travel/flight animation, galaxy map, walk‑based navigation, sidebar, sharing |
 | `layout.js` | DOM wiring (search, menus, path modal, keyboard) |
 
-## Run locally
-
-Any static HTTP server works — no build, no dependencies:
-
-```bash
-python3 -m http.server 8000
-# open http://localhost:8000
-```
-
 ## Credits & attribution
 
 - Article content & metadata: **[Wikipedia](https://wikipedia.org)** and
