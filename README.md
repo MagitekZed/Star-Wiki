@@ -1,52 +1,74 @@
-# StarWiki • Wikipedia Rabbit Hole Explorer
+# StarWiki — explore Wikipedia as a galaxy
 
-StarWiki turns Wikipedia into a 3D starfield you can drift through one link at a time. Every article is a glowing star; its most related links orbit around it as rays. Click a ray to fly to the next page and fall down the rabbit hole — then zoom out to see the whole journey as a constellation.
+### ▶ **[Open StarWiki](https://magitekzed.github.io/Star-Wiki/)**  ·  *where every link has gravity*
 
-It's a static site with **no backend** — pages, links, and metadata are fetched live from the Wikipedia and Wikidata APIs and rendered with [Three.js](https://threejs.org/).
+StarWiki turns Wikipedia into a 3D starfield you drift through one link at a time. Every
+article is a glowing star; its most‑related links orbit it as rays. Travel along a ray to
+the next page and fall down the rabbit hole — then zoom out to see your whole journey
+charted as a constellation.
 
-## Exploring
+No backend, no sign‑up, nothing to install — it's a static page that pulls live data from
+the Wikipedia and Wikidata APIs and renders it with [Three.js](https://threejs.org/).
 
-- **Click to travel.** Hover a ray or star to see its title, click it for a quick preview, then click the preview to fly there. The pink **return ray** always leads back to the page you came from.
-- **Relevance‑ranked links.** Each page shows up to ~20 outgoing links, ordered by relevance (via the Wikipedia `morelike:` search), with brighter rays for closer matches.
-- **Trail.** The pages you've visited stay behind as a faint glowing trail of ghost clusters, so you can see where you've been.
-- **Breadcrumbs & keys.** A breadcrumb bar tracks your path; **← / →** step back and forward through it, and any crumb jumps straight there.
-- **Search · Surprise me · Daily launchpad.** Jump to any article, roll a random one, or start from the day's featured / "on this day" articles on the welcome screen.
-- **Find a path.** Discover a chain of links between two articles — up to **3 links** via a bidirectional "meet in the middle" search — then fly the whole route.
+> A passion / portfolio project, built for the joy of wandering — not for clicks, accounts,
+> or retention. Poke around and see where you end up.
+
+## Try this first
+
+1. **Search** a topic you like — or hit **Surprise me** for a random one.
+2. **Tap a star** to peek at it, then **tap the card** to fly there.
+3. Keep going. The **green** spoke points to where you're headed; the **red** one leads back.
+4. Open the **galaxy map** (the constellation icon) to see everywhere you've been.
+5. Or use **Find a path** to connect any two articles — and watch the camera fly the route.
+
+## Getting around
+
+- **Tap to travel.** Tap a star or ray to preview it, then tap the card to fly there. Drag
+  to orbit, scroll / pinch to zoom.
+- **Spoke colours.** Green = forward (your next stop), red = back (where you came from),
+  gold = a branch you've already explored. Everything else is blue, ranked by relevance
+  (via the Wikipedia `morelike:` search), with brighter rays for closer matches.
+- **Breadcrumbs.** The bar up top tracks your trail; **← / →** step through it and any crumb
+  flies you straight there — the camera glides one continuous flight through every stop in
+  between, rather than cutting a straight line.
+- **Find a path.** Instant shortest paths between any two articles via
+  [Six Degrees of Wikipedia](https://www.sixdegreesofwikipedia.com/) (a precomputed link
+  graph of all of Wikipedia), with a live bidirectional link‑walk as a fallback. Then fly
+  the whole route.
+- **Search · Surprise me · Daily launchpad.** Jump anywhere, roll a random article, or start
+  from the day's featured / "on this day" picks on the welcome screen.
 
 ## The galaxy map
 
 Zoom out from a single cluster to your **entire journey** as a constellation:
 
-- **Size by relation** — each stop is sized by how many of your *other* visited articles it links with; the most‑connected hub gets a corona, so the centre of gravity of your rabbit hole pops out.
-- **Colour by type** — nodes are tinted by their Wikidata "instance of" type (person, place, organization, event, work, species, concept).
-- **Interlinks** — faint lines reveal which of your stops actually link to one another, not just the route you walked.
-- **Click any node** for an info popup (type, connections, length, categories) with a **Travel here** button.
-
-The map zooms out smoothly while the spokes fade away, "focuses in" as the data lands, and zooms back to your current page before flying the normal travel animation when you pick a destination.
-
-## Visual encoding (cluster view)
-
-- **Node colours by type.** Neighbour stars use the same Wikidata‑type palette as the map, and each ray fades from blue at the hub to its target's type colour toward the tip.
-- **Star size by article length** (optional, in *View options*).
-- **Cross‑links** (optional toggle) — a faint web showing how the current page's neighbours relate to each other.
-- **Legends.** A collapsible "Node types" key (bottom‑left, expands on hover) in the cluster view, and a fuller legend in the map.
-- **Wikidata facts & categories** for the current article in the sidebar, plus a filterable / sortable neighbour list.
+- **Size** — each stop grows with how many of your *other* stops it links to, so the hub of
+  your rabbit hole pops out (the most‑connected one gets a corona).
+- **Colour** — nodes are tinted by their Wikidata "instance of" type (person, place,
+  organization, event, work, species, concept).
+- **Edges** — solid lines are paths you've travelled (your route *and* any side‑branches);
+  dashed lines reveal other links between your stops.
+- **Tap any node** for an info popup (type, connections, length, categories) with a
+  **Travel here** button. Faraway nodes simplify to dim points so long journeys stay smooth.
 
 ## Journeys & sharing
 
 - **Shareable links** — your path lives in the URL hash, so a link reopens the exact journey.
 - **Saved journeys** — bookmark a route to revisit later.
 - **Snapshot** — download a PNG of the current view.
-- **Start over / recenter** — reset to the welcome screen or re‑centre the camera.
+- **Start over / recenter** — back to the welcome screen, or re‑centre the camera.
 
 ## Craft
 
-- **Selective bloom** so the bright stars and rays glow without the faint cross‑links flaring near the core.
-- Nebula backdrop, parallax starfield, twinkle, flowing "comet" dots, and a hero corona on the current page.
-- **Respects `prefers-reduced-motion`**, adapts to mobile (bottom sheet), prefetches on hover, and throttles the frame rate when idle.
-- **Polite API use** — requests are throttled and cached in‑memory, and sent with a descriptive `Api-User-Agent`.
+- Selective **bloom** so bright stars and rays glow without the faint cross‑links flaring.
+- Nebula backdrop, parallax starfield, twinkle, flowing "comet" dots, a hero corona on the
+  current page, and a cinematic fly‑through for multi‑stop jumps.
+- Respects **`prefers-reduced-motion`**, adapts to mobile (bottom sheet + tap‑to‑expand
+  legend), prefetches on hover, and throttles the frame rate when idle.
+- **Polite API use** — requests are throttled and cached in‑memory, sent with a descriptive
+  `Api-User-Agent`.
 
-## Architecture
+## Under the hood
 
 A static site, no build step. Three.js is loaded from a CDN via an import map.
 
@@ -55,18 +77,26 @@ A static site, no build step. Three.js is loaded from a CDN via an import map.
 | `index.html` | Markup, SVG icon defs, import map |
 | `styles.css` | All styling |
 | `wikipedia.js` | Live data: links, relevance, summaries, Wikidata facts/types, cross‑links, path‑finding |
-| `graphics.js` | Three.js scene, travel/animation, galaxy map, interaction, sidebar, sharing |
+| `graphics.js` | Three.js scene, travel/flight animation, galaxy map, walk‑based navigation, sidebar, sharing |
 | `layout.js` | DOM wiring (search, menus, path modal, keyboard) |
 
-## Running locally
+## Run locally
 
-Any static HTTP server works:
+Any static HTTP server works — no build, no dependencies:
 
 ```bash
 python3 -m http.server 8000
 # open http://localhost:8000
 ```
 
-## Attribution
+## Credits & attribution
 
-Content is from [Wikipedia](https://wikipedia.org) and [Wikidata](https://www.wikidata.org), available under [CC BY‑SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/). StarWiki is an independent project and is **not affiliated with or endorsed by the Wikimedia Foundation**.
+- Article content & metadata: **[Wikipedia](https://wikipedia.org)** and
+  **[Wikidata](https://www.wikidata.org)**, under
+  [CC BY‑SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/).
+- Pathfinding: **[Six Degrees of Wikipedia](https://www.sixdegreesofwikipedia.com/)** by
+  Jacob Wenger (open‑source).
+- Rendering: **[Three.js](https://threejs.org/)**.
+
+StarWiki is an independent project and is **not affiliated with or endorsed by the Wikimedia
+Foundation**.
