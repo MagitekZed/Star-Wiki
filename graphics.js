@@ -201,8 +201,9 @@ const SHARED_MATERIALS = new Set([
 // ====== Trail Mode state ======
 const clusterGroups = new Map(); // title -> {star, edge}
 const centerPositions = new Map(); // title -> THREE.Vector3
-const ghostQueue = []; // order of ghost titles
-const MAX_GHOSTS = 5;
+const ghostQueue = []; // order of ghost titles (oldest first)
+const MAX_GHOSTS = 5;     // recent ghosts kept as full (dim) clusters with rays + neighbours
+const FAR_GHOSTS = 150;   // older ghosts collapse to dim points; disposed only beyond this
 const SEGMENT_DIST = 40; // fixed spacing between centers
 
 const trailMaterial = new LineMaterial({
@@ -582,6 +583,34 @@ function ghostify(title){
       obj.material.transparent = true;
     }
   });
+}
+
+// Distance LOD: a ghost that's fallen outside the recent detailed window collapses to a
+// single dim point — its rays/comet dots and neighbour stars are disposed, leaving just
+// the centre. Keeps the trail visible far back without the cost/clutter of full bloomy
+// clusters; re-navigating to it rebuilds it in full (travelToNeighbor drops the stale group).
+function simplifyGhost(title){
+  if (!title || title === currentTitle) return;
+  const grp = clusterGroups.get(title);
+  if (!grp || grp.lod) return;
+  grp.lod = true;
+  clearGroup(grp.edge); // dispose + remove every ray/comet dot
+  grp.star.children.slice().forEach(o => {
+    if (o.userData && o.userData.kind === 'center') return; // keep the node point
+    disposeObject(o);
+    grp.star.remove(o);
+  });
+}
+
+// Keep recent ghosts in full, collapse older ones to points, dispose only past the far cap.
+function enforceGhostBudget(){
+  for (let i = 0; i < ghostQueue.length - MAX_GHOSTS; i++) simplifyGhost(ghostQueue[i]);
+  while (ghostQueue.length > FAR_GHOSTS){
+    const old = ghostQueue.shift();
+    if (old === currentTitle) continue;
+    const grp = clusterGroups.get(old);
+    if (grp){ disposeGroup(grp.star); disposeGroup(grp.edge); scene.remove(grp.star); scene.remove(grp.edge); clusterGroups.delete(old); centerPositions.delete(old); }
+  }
 }
 
 function updateTrail(){
@@ -1242,6 +1271,38 @@ function buildOverview(){
     overviewRouteMat = lineMat;
     overviewRouteBuiltAt = performance.now();
   }
+
+  // Traveled-branch edges: every hop in takenEdges that isn't part of the current linear
+  // route, so the explored web shows its side-branches (where you backtracked and went a
+  // different way), not just the trail. Solid + dimmer than the main route; the enter/exit
+  // transition fades them in/out with the rest of overviewGroup.
+  const rkey = (a, b) => a < b ? a + '|' + b : b + '|' + a;
+  const routeSet = new Set();
+  { let prev = null; for (const t of history){ if (t !== prev){ if (prev) routeSet.add(rkey(prev, t)); prev = t; } } }
+  const branchSeen = new Set();
+  takenEdges.forEach((tos, from) => {
+    const pa = journeyPositions.get(from);
+    if (!pa) return;
+    tos.forEach(to => {
+      const pb = journeyPositions.get(to);
+      if (!pb) return;
+      const key = rkey(from, to);
+      if (routeSet.has(key) || branchSeen.has(key)) return;
+      branchSeen.add(key);
+      const geo = new LineGeometry();
+      geo.setPositions([pa.x, pa.y, pa.z, pb.x, pb.y, pb.z]);
+      const m = overviewLineMaterial.clone();
+      m.opacity = 0.45;
+      m.dashSize = 1; m.gapSize = 0; m.dashOffset = 0; // solid (no draw-on animation)
+      m.resolution.set(container.clientWidth, container.clientHeight);
+      const line = new Line2(geo, m);
+      line.computeLineDistances();
+      line.raycast = () => {};
+      line.userData = { kind: 'overviewBranch' };
+      overviewGroup.add(line);
+    });
+  });
+
   scene.add(overviewGroup);
 }
 
@@ -1901,11 +1962,7 @@ async function travelToNeighbor(targetTitle, addToHistory=true){
       const prevGrp = clusterGroups.get(currentTitle);
       if (prevGrp) { prevGrp.star.visible = trailMode; prevGrp.edge.visible = trailMode; }
       ghostQueue.push(currentTitle);
-      if (ghostQueue.length > MAX_GHOSTS) {
-        const old = ghostQueue.shift();
-        const grp = clusterGroups.get(old);
-        if (grp) { disposeGroup(grp.star); disposeGroup(grp.edge); scene.remove(grp.star); scene.remove(grp.edge); clusterGroups.delete(old); centerPositions.delete(old); }
-      }
+      enforceGhostBudget();
       starGroup = newStar;
       edgeGroup = newEdge;
       wordToMesh = newMap;
@@ -2531,12 +2588,7 @@ async function flyAlongTrail(targetIndex){
       const prevGrp = clusterGroups.get(startCurrent);
       if (prevGrp){ prevGrp.star.visible = trailMode; prevGrp.edge.visible = trailMode; }
       if (ghostQueue.indexOf(startCurrent) === -1) ghostQueue.push(startCurrent);
-      while (ghostQueue.length > MAX_GHOSTS){
-        const old = ghostQueue.shift();
-        if (old === canonical) continue;
-        const grp = clusterGroups.get(old);
-        if (grp){ disposeGroup(grp.star); disposeGroup(grp.edge); scene.remove(grp.star); scene.remove(grp.edge); clusterGroups.delete(old); centerPositions.delete(old); }
-      }
+      enforceGhostBudget();
       newStar.traverse(o => { if (o.material && 'opacity' in o.material) o.material.opacity = o.userData.baseOpacity; });
       newEdge.traverse(o => { if (o.material && 'opacity' in o.material) o.material.opacity = o.userData.baseOpacity; });
       starGroup = newStar; edgeGroup = newEdge; wordToMesh = newMap;
@@ -2947,12 +2999,8 @@ async function buildJourneyClusters(titles){
     renderOnce();
   }
 
-  // Keep only the most recent ghosts (drop the oldest, farthest from the destination).
-  while (ghostQueue.length > MAX_GHOSTS){
-    const old = ghostQueue.shift();
-    const g = clusterGroups.get(old);
-    if (g){ disposeGroup(g.star); disposeGroup(g.edge); scene.remove(g.star); scene.remove(g.edge); clusterGroups.delete(old); centerPositions.delete(old); }
-  }
+  // Recent stops stay full; the ones farthest from the destination collapse to dim points.
+  enforceGhostBudget();
 
   journeyBuilding = false;
   setLoading(false);
