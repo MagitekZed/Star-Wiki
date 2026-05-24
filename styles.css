@@ -120,20 +120,23 @@ header h1.brand { display:flex; align-items:center; gap:8px; margin:0 6px 0 0; f
 .map-legend .legend-line { display:inline-block; width:16px; height:0; border-top-width:2px; border-top-style:solid; vertical-align:middle; }
 .map-legend .legend-line.route { border-color:#9fb8ff; }
 .map-legend .legend-line.inter { border-color:#8a7cc8; border-top-style:dashed; }
+.map-legend .legend-note { color:var(--muted); font-size:10px; line-height:1.45; border-top:1px solid var(--hairline); padding-top:7px; margin-top:1px; }
 
 /* Cluster-view link-type legend: collapsed chip, bottom-left, expands on hover */
 .type-legend { position:fixed; left:16px; bottom:42px; z-index:6; pointer-events:auto; opacity:0; transition:opacity 0.4s var(--ease-out);
   background:var(--panel-glass); -webkit-backdrop-filter:var(--blur); backdrop-filter:var(--blur); border:1px solid var(--hairline); border-radius:var(--radius); padding:8px 11px; box-shadow:var(--shadow-1);
   font-size:11px; color:var(--text-dim); max-width:240px; cursor:default; }
 .type-legend.hidden { display:none; }
-.type-legend .tl-head { display:flex; align-items:center; gap:4px; }
+.type-legend .tl-head { display:flex; align-items:center; justify-content:center; }
 .type-legend .tl-head i, .type-legend .tl-type i { width:9px; height:9px; border-radius:50%; display:inline-block; flex-shrink:0; }
-.type-legend .tl-label { margin-left:6px; color:var(--muted); }
+.type-legend .tl-label { color:var(--text); font-weight:600; letter-spacing:0.01em; }
+.type-legend .tl-cap { color:var(--muted); font-size:9.5px; text-transform:uppercase; letter-spacing:0.07em; margin-top:2px; }
 .type-legend .tl-body { max-height:0; opacity:0; overflow:hidden; display:flex; flex-direction:column; gap:6px; margin-top:0;
-  transition:max-height 0.3s var(--ease-out), opacity 0.3s var(--ease-out), margin-top 0.3s var(--ease-out); }
-.type-legend:hover .tl-body, .type-legend:focus-within .tl-body { max-height:240px; opacity:1; margin-top:9px; }
+  transition:max-height 0.35s var(--ease-out), opacity 0.35s var(--ease-out), margin-top 0.35s var(--ease-out); }
+.type-legend:hover .tl-body, .type-legend:focus-within .tl-body, .type-legend.open .tl-body { max-height:380px; opacity:1; margin-top:9px; }
+.type-legend { outline:none; }
 .type-legend .tl-type { display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
-.type-legend .tl-note { color:var(--muted); font-size:10.5px; line-height:1.4; border-top:1px solid var(--hairline); padding-top:6px; }
+.type-legend .tl-note { color:var(--muted); font-size:10.5px; line-height:1.45; border-top:1px solid var(--hairline); padding-top:6px; white-space:normal; }
 
 /* Galaxy-map node popup */
 .map-popup { position:fixed; z-index:40; width:240px; max-width:calc(100vw - 20px); pointer-events:auto;

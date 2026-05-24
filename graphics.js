@@ -1134,21 +1134,33 @@ function applyTypeColorsToMeshes(titles){
 // Cluster-view legend: a collapsed chip (bottom-left) listing the link-type colours
 // present on the current page; expands on hover. Hidden in map mode (the map's own
 // legend takes over) and on the blank welcome screen.
+// Shared "how to use" blurb shown in both the cluster Map Legend and the galaxy-map legend.
+const LEGEND_HELP =
+  'Tap a star to preview it, then tap the card to travel there. Drag to orbit · scroll to zoom. ' +
+  'Breadcrumbs (top) jump between your stops; the route icon opens the galaxy map of your whole journey.';
+
 function renderTypeLegend(){
   const box = document.getElementById('typeLegend');
   if (!box) return;
-  if (overviewActive || !currentTitle){ box.classList.add('hidden'); box.style.opacity = ''; box.innerHTML = ''; return; }
+  // Tap to toggle on touch (no hover); desktop also expands on hover (see CSS).
+  if (!box._tlBound){ box._tlBound = true; box.tabIndex = 0; box.addEventListener('click', () => box.classList.toggle('open')); }
+  if (overviewActive || !currentTitle){ box.classList.add('hidden'); box.classList.remove('open'); box.style.opacity = ''; box.innerHTML = ''; return; }
   const present = new Set();
   wordToMesh.forEach((m, t) => { if (m.userData && m.userData.kind === 'neighbor' && !m.userData.isPathLink){ const b = neighborTypeCache.get(t); if (b) present.add(b); } });
-  if (!present.size){ box.classList.add('hidden'); box.style.opacity = ''; box.innerHTML = ''; return; }
   const order = ['person','place','org','event','work','species','concept'];
-  const buckets = order.filter(b => present.has(b));
-  const hex = b => new THREE.Color(TYPE_BUCKETS[b].hue).getHexString();
-  const dots = buckets.map(b => `<i style="background:#${hex(b)}"></i>`).join('');
-  const rows = buckets.map(b => `<span class="tl-type"><i style="background:#${hex(b)}"></i>${TYPE_BUCKETS[b].label}</span>`).join('');
+  const hex = h => new THREE.Color(h).getHexString();
+  const typeRows = order.filter(b => present.has(b)).map(b =>
+    `<span class="tl-type"><i style="background:#${hex(TYPE_BUCKETS[b].hue)}"></i>${TYPE_BUCKETS[b].label}</span>`).join('');
   box.innerHTML =
-    `<div class="tl-head">${dots}<span class="tl-label">Node types</span></div>` +
-    `<div class="tl-body">${rows}</div>`;
+    `<div class="tl-head"><span class="tl-label">Map Legend</span></div>` +
+    `<div class="tl-body">` +
+      `<div class="tl-cap">Spokes</div>` +
+      `<span class="tl-type"><i style="background:#${hex(FORWARD_COLOR)}"></i>Forward — your next stop</span>` +
+      `<span class="tl-type"><i style="background:#${hex(RETURN_COLOR)}"></i>Back — where you came from</span>` +
+      `<span class="tl-type"><i style="background:#${hex(GOLD_COLOR)}"></i>Branch — another path you've taken</span>` +
+      (typeRows ? `<div class="tl-cap">Node types</div>${typeRows}` : '') +
+      `<div class="tl-note">${LEGEND_HELP}</div>` +
+    `</div>`;
   box.classList.remove('hidden');
   requestAnimationFrame(() => { box.style.opacity = '1'; });
 }
@@ -1586,7 +1598,8 @@ function renderMapLegend(types){
   box.innerHTML =
     `<div class="legend-row legend-size"><span class="legend-dot dot-sm"></span><span class="legend-dot dot-lg"></span> Bigger star = links to more of your stops</div>` +
     (swatches ? `<div class="legend-row legend-types">${swatches}</div>` : '') +
-    `<div class="legend-row legend-lines"><span class="legend-line route"></span> Your route &nbsp; <span class="legend-line inter"></span> Links between articles</div>`;
+    `<div class="legend-row legend-lines"><span class="legend-line route"></span> Paths you've travelled &nbsp; <span class="legend-line inter"></span> Links between your stops</div>` +
+    `<div class="legend-note">${LEGEND_HELP}</div>`;
   box.classList.remove('hidden');
   requestAnimationFrame(() => { box.style.opacity = '1'; });
 }
