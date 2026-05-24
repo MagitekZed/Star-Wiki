@@ -1046,7 +1046,7 @@ function drawCrossLinks(pairs){
     if (crossLinkLines.length >= 80) break;
     const ma = wordToMesh.get(a), mb = wordToMesh.get(b);
     if (!ma || !mb) continue;
-    const key = a < b ? a + ' ' + b : b + ' ' + a; // undirected dedupe
+    const key = a < b ? a + '\u0000' + b : b + '\u0000' + a; // undirected dedupe
     if (seen.has(key)) continue;
     seen.add(key);
     const pa = ma.position, pb = mb.position;
@@ -1373,14 +1373,14 @@ function buildOverviewInterlinks(pairs){
   const routeEdges = new Set();
   for (let i = 0; i + 1 < history.length; i++){
     const x = history[i], y = history[i + 1];
-    if (x && y && x !== y) routeEdges.add(x < y ? x + '' + y : y + '' + x);
+    if (x && y && x !== y) routeEdges.add(x < y ? x + '\u0001' + y : y + '\u0001' + x);
   }
   const links = new Map();
   for (const [from, to] of (pairs || [])){
     if (from === to || !titleSet.has(from) || !titleSet.has(to)) continue;
     const fwd = from < to;
     const a = fwd ? from : to, b = fwd ? to : from;
-    const key = a + '' + b;
+    const key = a + '\u0001' + b;
     if (routeEdges.has(key)) continue; // route edge — already drawn as the solid route line
     let e = links.get(key);
     if (!e){ e = { a, b, ab: false, ba: false }; links.set(key, e); }
