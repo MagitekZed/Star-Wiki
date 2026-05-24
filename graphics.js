@@ -718,7 +718,7 @@ function pathBack(title){
 
 function goBackOne(){
   const prev = getChainPrev();
-  if (prev && historyIndex > 0 && !isAnimating) {
+  if (prev && historyIndex > 0 && !isAnimating && !journeyBuilding) {
     historyIndex--;
     travelToNeighbor(prev, false);
     return true;
@@ -727,7 +727,7 @@ function goBackOne(){
 }
 
 function goForwardOne(){
-  if (historyIndex < history.length - 1 && !isAnimating) {
+  if (historyIndex < history.length - 1 && !isAnimating && !journeyBuilding) {
     const next = history[historyIndex + 1];
     historyIndex++;
     travelToNeighbor(next, false);
@@ -2396,6 +2396,7 @@ function saveSnapshot(){
 
 function jumpToBreadcrumb(index){
   if (index === historyIndex) return;
+  if (journeyBuilding) return; // ignore clicks while a path is still laying out its trail
   if (isAnimating) { queueNav({ type:'breadcrumb', index }); return; }
   // Fly the trail one stop at a time so a multi-stop jump follows the journey
   // (e.g. 4→3→2→1) instead of cutting a straight line to a distant node. We
