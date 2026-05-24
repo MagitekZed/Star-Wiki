@@ -2468,12 +2468,15 @@ async function flyAlongTrail(targetIndex){
   newStar.position.copy(to); newEdge.position.copy(to);
   scene.add(newStar); scene.add(newEdge);
 
-  // The cluster we're leaving becomes a dim ghost right away and stays visible as we fly
-  // past it (no fade-out then end-pop); only the incoming target fades in on arrival.
+  // The cluster we're leaving keeps its full detail (bloom/effects) and fades out by
+  // DISTANCE as we pull away — settling to the dim "distant node" standard — rather than
+  // having its effects killed instantly. Only the incoming target fades in on arrival.
   const armFade = g => g.traverse(o => { if (o.material && 'opacity' in o.material){ o.userData.baseOpacity = o.material.opacity; o.material.opacity = 0; o.material.transparent = true; }});
+  const noteOpacity = g => g.traverse(o => { if (o.material && 'opacity' in o.material) o.userData.baseOpacity = o.material.opacity; });
   armFade(newStar); armFade(newEdge);
-  ghostify(startCurrent);
-  { const sg = clusterGroups.get(startCurrent); if (sg){ sg.star.visible = trailMode; sg.edge.visible = trailMode; } }
+  const leavingStar = starGroup, leavingEdge = edgeGroup;
+  noteOpacity(leavingStar); noteOpacity(leavingEdge);
+  const DIST_NEAR = SEGMENT_DIST * 0.3, DIST_SPAN = SEGMENT_DIST * 0.9; // full → distant standard
 
   // Smooth curve through the waypoints (centripetal Catmull-Rom) so corners round off
   // instead of hard angles; getPointAt() gives even speed along the curve.
@@ -2486,7 +2489,10 @@ async function flyAlongTrail(targetIndex){
   const hops = pts.length - 1;
   const UP = new THREE.Vector3(0, 1, 0);
   const FLYBY_TURN = 0.6; // gentle orbital drift (radians): swings out mid-flight, returns by arrival
-  const zoomDur = REDUCED ? 0 : 500;            // settle to a default framing on the current node first
+  // Skip the initial framing zoom when we're already at the default distance (e.g. coming
+  // straight from the galaxy-map transition), so it flows zoom → flight with no pause.
+  const needZoom = startOffset.distanceTo(defaultOffset) > defaultDist * 0.04;
+  const zoomDur = (REDUCED || !needZoom) ? 0 : 500;
   const flyDur = REDUCED ? 350 : 2500 * hops;   // ~2.5s per segment, so you fly through instead of zipping
   const easeInOut = x => x < 0.5 ? 4*x*x*x : 1 - Math.pow(-2*x+2, 3)/2;
   const t0 = performance.now();
@@ -2507,11 +2513,19 @@ async function flyAlongTrail(targetIndex){
     const ease = easeInOut(t);
     const curTarget = posAlong(ease);
     controls.target.copy(curTarget);
-    const orbit = defaultOffset.clone().applyAxisAngle(UP, FLYBY_TURN * Math.sin(t * Math.PI));
+    // Orbit + breathing zoom both keyed off `ease`, so velocity decays to ~0 at arrival
+    // and hands off smoothly to the idle floating spin (same vertical axis).
+    const orbit = defaultOffset.clone().applyAxisAngle(UP, FLYBY_TURN * Math.sin(ease * Math.PI));
     const dolly = REDUCED ? 1 : (1 + 0.18 * Math.sin(ease * Math.PI) + 0.14 * Math.sin(ease * Math.PI * 3));
     camera.position.copy(curTarget.clone().add(orbit.multiplyScalar(dolly)));
 
-    // The departed cluster is already a ghost; only fade the incoming target in on arrival.
+    // Fade the departed cluster out by how far the camera has pulled away from it, down to
+    // the dim distant-node standard (matches a ghost), keeping its effects until it's far.
+    const df = Math.min(1, Math.max(0, (curTarget.distanceTo(fromAbs) - DIST_NEAR) / DIST_SPAN));
+    leavingStar.traverse(o => { if (o.material && 'opacity' in o.material) o.material.opacity = o.userData.baseOpacity * (1 - df) + 0.25 * df; });
+    leavingEdge.traverse(o => { if (o.material && 'opacity' in o.material) o.material.opacity = o.userData.baseOpacity * (1 - df) + 0.15 * df; });
+
+    // Incoming target fades in on arrival.
     const fadeIn = t > 0.65 ? (t - 0.65) / 0.35 : 0;
     newStar.traverse(o => { if (o.material && 'opacity' in o.material) o.material.opacity = o.userData.baseOpacity * fadeIn; });
     newEdge.traverse(o => { if (o.material && 'opacity' in o.material) o.material.opacity = o.userData.baseOpacity * fadeIn; });
