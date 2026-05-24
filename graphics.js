@@ -181,6 +181,10 @@ const materialVisited = new THREE.SpriteMaterial({
   depthWrite: false
 });
 const RETURN_COLOR = 0xf7768e;
+// Colour for "on your path" links — the next/prev stop of a found path, forced into
+// the displayed neighbours so the route stays clickable even when those links rank
+// outside the top 20 (see pathRoute / pathForward / pathBack).
+const PATH_LINK_COLOR = 0x9ece6a;
 const materialRayHover = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 1, linewidth: 2, depthWrite: false });
 
 // Shared materials that must never be disposed when tearing down a group
@@ -594,6 +598,10 @@ function updateTrail(){
 let currentTitle = null;
 let history = [];
 let historyIndex = -1;
+// Ordered (canonical) titles of the active "found path", set by loadPath and cleared
+// on a fresh start (search/random/reset). Used to inject each stop's adjacent path
+// hops into its displayed neighbours so the route stays clickable along the stars.
+let pathRoute = [];
 const visited = new Set();
 let wordToMesh = new Map();
 let showBacklinks = false;
@@ -694,6 +702,20 @@ function getChainPrev(){
   return historyIndex > 0 ? history[historyIndex - 1] : null;
 }
 
+// Oriented neighbours on the active found path, by the route's fixed source→destination
+// direction (not by how you happened to arrive). The forward hop is drawn green, the
+// back hop red, so the route always reads the same: green = onward, red = toward start.
+function pathForward(title){
+  if (!pathRoute.length || !title) return null;
+  const i = pathRoute.indexOf(title);
+  return (i !== -1 && i < pathRoute.length - 1) ? pathRoute[i + 1] : null;
+}
+function pathBack(title){
+  if (!pathRoute.length || !title) return null;
+  const i = pathRoute.indexOf(title);
+  return i > 0 ? pathRoute[i - 1] : null;
+}
+
 function goBackOne(){
   const prev = getChainPrev();
   if (prev && historyIndex > 0 && !isAnimating) {
@@ -739,8 +761,9 @@ function metricMult(meta){
 // ---- Bloom tween store for cluster expansion
 const _blooms = []; // { mesh, start, delayMs, target }
 
-function placeNeighbor(title, posArray, group = starGroup, map = wordToMesh, meta = null, instant = false){
+function placeNeighbor(title, posArray, group = starGroup, map = wordToMesh, meta = null, instant = false, pathColor = null){
   const isVisited = visited.has(title);
+  const isPathLink = pathColor != null;
   const baseMat = isVisited
     ? materialVisited
     : (showBacklinks ? materialBackNeighbor : materialNeighbor);
@@ -748,10 +771,14 @@ function placeNeighbor(title, posArray, group = starGroup, map = wordToMesh, met
   mesh.position.set(posArray[0], posArray[1], posArray[2]);
   const th = seededHash(title);
   // Visited stars read as smaller + dimmer ("been there"); the size metric (if
-  // any) then scales that base.
-  const baseScale = (isVisited ? 0.8 : 1.2) * metricMult(meta);
+  // any) then scales that base. A path link overrides that dimming — it always
+  // reads as a bright, slightly larger waypoint in its route colour (green = onward,
+  // red = toward start).
+  if (isPathLink) mesh.material.color.setHex(pathColor);
+  const baseScale = (isPathLink ? 1.5 : (isVisited ? 0.8 : 1.2)) * metricMult(meta);
   mesh.userData = {
-    title, kind: 'neighbor', baseScale,
+    title, kind: 'neighbor', baseScale, isPathLink,
+    baseColorHex: isPathLink ? pathColor : undefined,
     // Per-star twinkle so the cluster breathes organically instead of in lockstep.
     twFreq: 1.0 + (th % 100) / 100 * 1.8,   // 1.0 .. 2.8 Hz-ish
     twPhase: ((th >> 7) % 628) / 100,        // 0 .. ~2π
@@ -858,19 +885,32 @@ function buildStarInto(centerTitle, data, gStar, gEdge, map, prevTitle=null, pre
   const neighbors = data.neighbors.slice(0,20);
   const filtered = prevTitle ? neighbors.filter(nb => nb !== prevTitle) : neighbors;
 
+  // Path injection (Option 1), oriented by the route's fixed direction: the forward hop
+  // (toward the destination) is forced in as a GREEN link, the back hop (toward the
+  // source) as RED — so the route always reads the same regardless of how you arrived.
+  // The hop you actually came from (prevTitle) is the return ray, recoloured to match.
+  const fwdHop = pathForward(centerTitle);
+  const backHop = pathBack(centerTitle);
+  const pathColorOf = t => (t && t === fwdHop) ? PATH_LINK_COLOR : ((t && t === backHop) ? RETURN_COLOR : null);
+  const displayNeighbors = filtered.slice();
+  [fwdHop, backHop].forEach(t => { if (t && t !== prevTitle && !displayNeighbors.includes(t)) displayNeighbors.push(t); });
+
   const meta = data.metaByTitle || {};
-  filtered.forEach((nb, i) => {
-    const pos = positionForNeighbor(nb, i, filtered.length);
-    placeNeighbor(nb, pos, gStar, map, meta[nb], instant);
-    drawRay(centerTitle, nb, new THREE.Vector3(0,0,0), new THREE.Vector3(pos[0], pos[1], pos[2]), i, filtered.length, gEdge);
+  displayNeighbors.forEach((nb, i) => {
+    const col = pathColorOf(nb);
+    const pos = positionForNeighbor(nb, i, displayNeighbors.length);
+    placeNeighbor(nb, pos, gStar, map, meta[nb], instant, col);
+    drawRay(centerTitle, nb, new THREE.Vector3(0,0,0), new THREE.Vector3(pos[0], pos[1], pos[2]), i, displayNeighbors.length, gEdge, col);
   });
 
+  // Return ray to the stop you came from. On a route it's coloured by orientation
+  // (green if it's the forward hop, red if back/off-route), so green always = onward.
   if (prevTitle && prevVec) {
-    drawRay(centerTitle, prevTitle, new THREE.Vector3(0,0,0), prevVec, 0, 1, gEdge, RETURN_COLOR);
+    drawRay(centerTitle, prevTitle, new THREE.Vector3(0,0,0), prevVec, 0, 1, gEdge, pathColorOf(prevTitle) || RETURN_COLOR);
   }
 
   // Trail clusters of a loaded journey skip the sidebar (it shows the destination).
-  if (updateUI) updateSidebar(data.center, filtered, prevTitle, data.metaByTitle);
+  if (updateUI) updateSidebar(data.center, displayNeighbors, prevTitle, data.metaByTitle);
 }
 
 function rebuildStar(title, addToHistory=true){
@@ -1041,6 +1081,7 @@ function applyTypeColorsToMeshes(titles){
     if (!bucket) return;
     const mesh = wordToMesh.get(t);
     if (!mesh || !mesh.userData || mesh.userData.kind !== 'neighbor') return;
+    if (mesh.userData.isPathLink) return; // path links keep their route colour
     const hue = TYPE_BUCKETS[bucket].hue;
     mesh.userData.typeHue = hue;
     // Visited stays grey ("been there"); a hovered star keeps its hover tint.
@@ -1060,7 +1101,7 @@ function renderTypeLegend(){
   if (!box) return;
   if (overviewActive || !currentTitle){ box.classList.add('hidden'); box.style.opacity = ''; box.innerHTML = ''; return; }
   const present = new Set();
-  wordToMesh.forEach((m, t) => { if (m.userData && m.userData.kind === 'neighbor'){ const b = neighborTypeCache.get(t); if (b) present.add(b); } });
+  wordToMesh.forEach((m, t) => { if (m.userData && m.userData.kind === 'neighbor' && !m.userData.isPathLink){ const b = neighborTypeCache.get(t); if (b) present.add(b); } });
   if (!present.size){ box.classList.add('hidden'); box.style.opacity = ''; box.innerHTML = ''; return; }
   const order = ['person','place','org','event','work','species','concept'];
   const buckets = order.filter(b => present.has(b));
@@ -1084,7 +1125,7 @@ function recolorRaysByType(){
   edgeGroup.children.forEach(obj => {
     const ud = obj.userData;
     if (!ud) return;
-    if (ud.kind === 'ray' && ud.title && ud.baseColorHex !== RETURN_COLOR){
+    if (ud.kind === 'ray' && ud.title && ud.baseColorHex !== RETURN_COLOR && ud.baseColorHex !== PATH_LINK_COLOR){
       const bucket = neighborTypeCache.get(ud.title);
       if (!bucket || !obj.geometry || !obj.geometry.setColors) return;
       const start = new THREE.Color(ud.baseColorHex);
@@ -1125,7 +1166,7 @@ function applyStarSizes(){
   wordToMesh.forEach((mesh, title) => {
     if (!mesh.userData || mesh.userData.kind !== 'neighbor') return;
     const isVisited = visited.has(title);
-    const base = (isVisited ? 0.8 : 1.2) * metricMult(currentMeta[title]);
+    const base = (mesh.userData.isPathLink ? 1.5 : (isVisited ? 0.8 : 1.2)) * metricMult(currentMeta[title]);
     mesh.userData.baseScale = base;
     mesh.scale.set(base, base, 1);
   });
@@ -1886,6 +1927,10 @@ let neighborFilter = '';
 let currentNeighbors = [];
 let currentChainPrev = null;
 let currentMeta = {};
+// Path hops to badge/pin in the neighbour list: title -> 'fwd' | 'back', captured from
+// the rendered center's title (the global currentTitle isn't updated until a travel
+// animation completes). 'fwd' = toward destination (green), 'back' = toward source (red).
+let currentPathLinks = new Map();
 let sidebarToken = 0; // bumped each render so async facts can detect a stale sidebar
 // Panel-preview: when set, the info panel shows a previewed (non-current) map node
 // without changing the journey. savedSidebar/lastSidebar let us restore the real page.
@@ -1960,6 +2005,13 @@ function updateSidebar(center, neighbors, chainPrev, metaByTitle = {}, previewOf
   currentNeighbors = neighbors.slice();
   currentChainPrev = chainPrev || null;
   currentMeta = metaByTitle || {};
+  // Path hops for the page being rendered (not while previewing another node).
+  currentPathLinks = new Map();
+  if (!previewOf) {
+    const fwd = pathForward(center.title), back = pathBack(center.title);
+    if (fwd) currentPathLinks.set(fwd, 'fwd');
+    if (back) currentPathLinks.set(back, 'back');
+  }
   neighborFilter = '';
 
   const controls = document.getElementById('neighborControls');
@@ -2069,6 +2121,17 @@ function renderNeighborList(animateIn = false){
     list.sort((a, b) => ((currentMeta[b] && currentMeta[b].length) || 0) - ((currentMeta[a] && currentMeta[a].length) || 0));
   }
 
+  // "On your path" hops (forward/back stops of an active found path) get pinned to the
+  // top — forward (green) first, then back (red) — and badged in their route colour.
+  // Captured per-render in updateSidebar; empty while previewing another node.
+  const pathSet = currentPathLinks;
+  if (pathSet.size) {
+    const fwd = list.filter(t => pathSet.get(t) === 'fwd');
+    const back = list.filter(t => pathSet.get(t) === 'back');
+    const rest = list.filter(t => !pathSet.has(t));
+    list = [...fwd, ...back, ...rest];
+  }
+
   list.forEach((nb, i) => {
     const row = document.createElement('div');
     row.className = 'neighbor';
@@ -2077,6 +2140,9 @@ function renderNeighborList(animateIn = false){
       row.style.animationDelay = (i * 28) + 'ms';
     }
     if (visited.has(nb)) row.classList.add('visited');
+    const pathRole = pathSet.get(nb); // 'fwd' | 'back' | undefined
+    if (pathRole === 'fwd') row.classList.add('on-path');
+    else if (pathRole === 'back') row.classList.add('on-path-back');
     if (panelPreviewTitle) {
       // Preview mode: neighbours are informational only (this isn't your current page).
       row.classList.add('noclick');
@@ -2098,6 +2164,12 @@ function renderNeighborList(animateIn = false){
     titleDiv.textContent = nb;
     titleDiv.title = nb;
     meta.appendChild(titleDiv);
+    if (pathRole) {
+      const badge = document.createElement('span');
+      badge.className = 'nb-path-badge' + (pathRole === 'back' ? ' back' : '');
+      badge.textContent = 'On your path';
+      meta.appendChild(badge);
+    }
     const extractDiv = document.createElement('div');
     extractDiv.className = 'extract';
     meta.appendChild(extractDiv);
@@ -2325,9 +2397,16 @@ function saveSnapshot(){
 function jumpToBreadcrumb(index){
   if (index === historyIndex) return;
   if (isAnimating) { queueNav({ type:'breadcrumb', index }); return; }
-  historyIndex = index;
-  const title = history[index];
-  travelToNeighbor(title, false); // straight segment between existing centers
+  // Fly the trail one stop at a time so a multi-stop jump follows the journey
+  // (e.g. 4→3→2→1) instead of cutting a straight line to a distant node. We
+  // advance a single stop here and, if more remain, re-queue the same target;
+  // the hop's completion runs flushQueuedActions, which calls us again until we
+  // land on `index`. (Single adjacent jumps just do the one hop.)
+  const step = index < historyIndex ? -1 : 1;
+  const nextIndex = historyIndex + step;
+  historyIndex = nextIndex;
+  if (nextIndex !== index) queueNav({ type:'breadcrumb', index });
+  travelToNeighbor(history[nextIndex], false); // straight segment between adjacent centers
 }
 
 // ====== Hover ======
@@ -2345,6 +2424,8 @@ function resetHovered(){
     // Re-apply the Wikidata-type colour (unvisited only; visited stays grey).
     const hue = obj.userData.typeHue;
     if (hue != null && !visited.has(obj.userData.title)) obj.material.color.setHex(hue);
+    // Path links keep their route colour (green forward / red back) regardless of state.
+    if (obj.userData.isPathLink && obj.userData.baseColorHex != null) obj.material.color.setHex(obj.userData.baseColorHex);
     if (prevMat && !SHARED_MATERIALS.has(prevMat) && typeof prevMat.dispose === 'function') prevMat.dispose();
     if(obj.userData.baseScale) obj.scale.set(obj.userData.baseScale, obj.userData.baseScale, 1);
   } else if (obj.userData.normalMat) {
@@ -2531,6 +2612,7 @@ function onGo(val){
   starCache.clear();
   summaryCache.clear();
   visited.clear();
+  pathRoute = []; // leaving any found path; stop injecting its hops
   history = [];
   historyIndex = -1;
   updateBreadcrumbs();
@@ -2554,6 +2636,7 @@ function resetToWelcome(){
   clearAllScene();
   currentTitle = null;
   history = [];
+  pathRoute = [];
   historyIndex = -1;
   visited.clear();
   showBacklinks = false;
@@ -2640,6 +2723,7 @@ function loadPath(path){
   scene.add(starGroup); scene.add(edgeGroup);
   wordToMesh = new Map();
   history = path.slice();
+  pathRoute = path.slice(); // the active route; canonicalized per-stop as it builds
   historyIndex = history.length - 1;
   controls.target.set(0, 0, 0);
   camera.position.copy(DEFAULT_CAM_POS);
@@ -2665,6 +2749,7 @@ async function buildJourneyClusters(titles){
   try { dest = await getPageStar(titles[li], false); }
   catch { journeyBuilding = false; setLoading(false); showToast('Failed to load path.'); return; }
   const dCanon = dest.center.title;
+  pathRoute[li] = dCanon; // keep the route in canonical titles to match centerTitle
   const dPrev = n > 1 ? titles[li-1] : null;
   const dPrevVec = n > 1 ? pos[li-1].clone().sub(pos[li]) : null;
   const dS = new THREE.Group(), dE = new THREE.Group(), dM = new Map();
@@ -2692,6 +2777,7 @@ async function buildJourneyClusters(titles){
     let s;
     try { s = await getPageStar(titles[i], false); } catch { continue; }
     const c = s.center.title;
+    pathRoute[i] = c; // canonical title for this stop (enables next-hop injection)
     const pv = i > 0 ? pos[i-1].clone().sub(pos[i]) : null;
     const pt = i > 0 ? titles[i-1] : null;
     const gS = new THREE.Group(), gE = new THREE.Group(), gm = new Map();

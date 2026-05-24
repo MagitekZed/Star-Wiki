@@ -22,6 +22,7 @@
   --gold-2: #ff9e57;
   --magenta: #f7768e;
   --danger: #f7768e;
+  --path: #9ece6a;           /* "on your path" route links */
   --visited: #5b6582;
 
   /* ---- Glow / shadow ---- */
@@ -252,6 +253,15 @@ main { position:relative; z-index:2; flex:1; min-height:0; display:flex; justify
 .neighbor .ext { margin-left:4px; color:var(--muted); text-decoration:none; }
 .neighbor .ext:hover { color:var(--accent); }
 .badge { padding:2px 6px; border-radius:6px; background:#23283b; color:var(--muted); }
+/* "On your path" — found-path hops pinned to the top, coloured by route direction:
+   green = forward (toward destination), red = back (toward source). */
+.neighbor.on-path { border-color:var(--path); background:rgba(158,206,106,0.10); }
+.neighbor.on-path:hover { border-color:var(--path); background:rgba(158,206,106,0.16); }
+.neighbor.on-path-back { border-color:var(--danger); background:rgba(247,118,142,0.10); }
+.neighbor.on-path-back:hover { border-color:var(--danger); background:rgba(247,118,142,0.16); }
+.neighbor.on-path.visited, .neighbor.on-path-back.visited { opacity:1; } /* waypoints stay prominent even once visited */
+.nb-path-badge { display:inline-block; margin-top:3px; padding:1px 7px; border-radius:999px; font-size:10px; font-weight:600; letter-spacing:0.02em; color:#0b0d18; background:var(--path); }
+.nb-path-badge.back { background:var(--danger); }
 
 .tooltip { position:absolute; pointer-events:none; padding:4px 8px; font-size:12px; background:#11131a; color:var(--text); border:1px solid var(--edge); border-radius:6px; transform: translate(-50%, -140%); white-space:nowrap; opacity:0; transition: opacity 0.12s ease; }
 .tooltip.show { opacity: 1; }
