@@ -2398,16 +2398,141 @@ function jumpToBreadcrumb(index){
   if (index === historyIndex) return;
   if (journeyBuilding) return; // ignore clicks while a path is still laying out its trail
   if (isAnimating) { queueNav({ type:'breadcrumb', index }); return; }
-  // Fly the trail one stop at a time so a multi-stop jump follows the journey
-  // (e.g. 4→3→2→1) instead of cutting a straight line to a distant node. We
-  // advance a single stop here and, if more remain, re-queue the same target;
-  // the hop's completion runs flushQueuedActions, which calls us again until we
-  // land on `index`. (Single adjacent jumps just do the one hop.)
-  const step = index < historyIndex ? -1 : 1;
-  const nextIndex = historyIndex + step;
-  historyIndex = nextIndex;
-  if (nextIndex !== index) queueNav({ type:'breadcrumb', index });
-  travelToNeighbor(history[nextIndex], false); // straight segment between adjacent centers
+  if (Math.abs(index - historyIndex) === 1) {
+    // Adjacent: a single smooth hop (already a continuous tween).
+    historyIndex = index;
+    travelToNeighbor(history[index], false);
+  } else {
+    // Multi-stop: one continuous flight along the trail through every stop in between.
+    flyAlongTrail(index);
+  }
+}
+
+// Continuous camera flight from the current stop, through every charted stop in
+// between, to history[targetIndex]. Unlike a chain of hops, the camera never stops at
+// the intermediate nodes — it eases in once, glides the whole polyline, eases out once.
+// Only the target is rebuilt and made current; the in-between clusters stay put as the
+// visible trail we fly past. (This is the routine the galaxy-map "travel here" reuses.)
+async function flyAlongTrail(targetIndex){
+  if (isAnimating || journeyBuilding || !currentTitle) return;
+  const startIndex = historyIndex;
+  const step = targetIndex < startIndex ? -1 : 1;
+  const targetTitle = history[targetIndex];
+  const startCurrent = currentTitle;
+
+  // Stops we pass through, after the current one, up to and including the target.
+  const passTitles = [];
+  for (let k = startIndex + step; ; k += step){ passTitles.push(history[k]); if (k === targetIndex) break; }
+
+  const posOf = t => centerPositions.get(t) || journeyPositions.get(t) || null;
+  const fromAbs = (posOf(startCurrent) || new THREE.Vector3()).clone();
+
+  peekedObject = null;
+  clearPanelPreview();
+  notifyNavigate();
+  if (overviewActive) teardownOverview();
+
+  isAnimating = true;
+  setLoading(true);
+  let star;
+  try { star = await getPageStar(targetTitle, showBacklinks); }
+  catch { setLoading(false); showToast('Failed to load page.'); isAnimating = false; return; }
+  setLoading(false);
+
+  const canonical = star.center.title;
+  const to = (posOf(canonical) || fromAbs.clone()).clone();
+
+  // Polyline: current center → each charted intermediate center → target center.
+  const pts = [fromAbs.clone()];
+  for (const t of passTitles){ const p = (t === targetTitle) ? to : posOf(t); if (p) pts.push(p.clone()); }
+  if (pts.length < 2) pts.push(to.clone());
+
+  // Rebuild the target cluster fresh so it becomes the new current page.
+  const oldGrp = clusterGroups.get(canonical);
+  if (oldGrp){ disposeGroup(oldGrp.star); disposeGroup(oldGrp.edge); scene.remove(oldGrp.star); scene.remove(oldGrp.edge); clusterGroups.delete(canonical); }
+  const gqIdx = ghostQueue.indexOf(canonical); if (gqIdx !== -1) ghostQueue.splice(gqIdx, 1);
+  history[targetIndex] = canonical;
+
+  const newStar = new THREE.Group(), newEdge = new THREE.Group(), newMap = new Map();
+  const prevForTarget = history[targetIndex - step];
+  const prevPos = prevForTarget ? posOf(prevForTarget) : null;
+  buildStarInto(canonical, star, newStar, newEdge, newMap, prevForTarget || null, prevPos ? prevPos.clone().sub(to) : null);
+  newStar.position.copy(to); newEdge.position.copy(to);
+  scene.add(newStar); scene.add(newEdge);
+
+  // Crossfade: current fades as we leave, target fades in as we arrive; the trail
+  // we fly past stays at full opacity in between.
+  const armFade = g => g.traverse(o => { if (o.material && 'opacity' in o.material){ o.userData.baseOpacity = o.material.opacity; o.material.opacity = 0; o.material.transparent = true; }});
+  const noteOpacity = g => g.traverse(o => { if (o.material && 'opacity' in o.material){ o.userData.baseOpacity = o.material.opacity; }});
+  armFade(newStar); armFade(newEdge); noteOpacity(starGroup); noteOpacity(edgeGroup);
+
+  // Arc-length parametrisation so speed is even along the whole polyline.
+  const segLen = []; let total = 0;
+  for (let i = 1; i < pts.length; i++){ const d = pts[i].distanceTo(pts[i-1]); segLen.push(d); total += d; }
+  const posAlong = e => {
+    if (total <= 0) return pts[pts.length-1].clone();
+    let d = e * total, i = 0;
+    while (i < segLen.length - 1 && d > segLen[i]){ d -= segLen[i]; i++; }
+    const f = segLen[i] > 0 ? Math.min(1, d / segLen[i]) : 1;
+    return pts[i].clone().lerp(pts[i+1], f);
+  };
+
+  const startOffset = camera.position.clone().sub(controls.target.clone());
+  const hops = pts.length - 1;
+  const duration = REDUCED ? 350 : Math.min(3600, Math.max(1200, 620 * hops));
+  const t0 = performance.now();
+  function tick(now){
+    const t = Math.min(1, (now - t0) / duration);
+    const ease = t < 0.5 ? 4*t*t*t : 1 - Math.pow(-2*t+2, 3)/2; // ease across the WHOLE flight
+    const curTarget = posAlong(ease);
+    controls.target.copy(curTarget);
+    // Dolly back through the middle of the flight for a sense of travel, settling at both ends.
+    const dolly = REDUCED ? 1 : (1 + 0.18 * Math.sin(ease * Math.PI));
+    camera.position.copy(curTarget.clone().add(startOffset.clone().multiplyScalar(dolly)));
+
+    const fadeOut = t < 0.35 ? 1 - t / 0.35 : 0;
+    const fadeIn = t > 0.65 ? (t - 0.65) / 0.35 : 0;
+    starGroup.traverse(o => { if (o.material && 'opacity' in o.material) o.material.opacity = o.userData.baseOpacity * fadeOut; });
+    edgeGroup.traverse(o => { if (o.material && 'opacity' in o.material) o.material.opacity = o.userData.baseOpacity * fadeOut; });
+    newStar.traverse(o => { if (o.material && 'opacity' in o.material) o.material.opacity = o.userData.baseOpacity * fadeIn; });
+    newEdge.traverse(o => { if (o.material && 'opacity' in o.material) o.material.opacity = o.userData.baseOpacity * fadeIn; });
+
+    renderOnce();
+    if (t < 1) requestAnimationFrame(tick);
+    else {
+      // Leave the start cluster behind as a ghost; the in-between stops are untouched.
+      ghostify(startCurrent);
+      const prevGrp = clusterGroups.get(startCurrent);
+      if (prevGrp){ prevGrp.star.visible = trailMode; prevGrp.edge.visible = trailMode; }
+      if (ghostQueue.indexOf(startCurrent) === -1) ghostQueue.push(startCurrent);
+      while (ghostQueue.length > MAX_GHOSTS){
+        const old = ghostQueue.shift();
+        if (old === canonical) continue;
+        const grp = clusterGroups.get(old);
+        if (grp){ disposeGroup(grp.star); disposeGroup(grp.edge); scene.remove(grp.star); scene.remove(grp.edge); clusterGroups.delete(old); centerPositions.delete(old); }
+      }
+      newStar.traverse(o => { if (o.material && 'opacity' in o.material) o.material.opacity = o.userData.baseOpacity; });
+      newEdge.traverse(o => { if (o.material && 'opacity' in o.material) o.material.opacity = o.userData.baseOpacity; });
+      starGroup = newStar; edgeGroup = newEdge; wordToMesh = newMap;
+      currentTitle = canonical;
+      historyIndex = targetIndex;
+      clusterGroups.set(currentTitle, { star: starGroup, edge: edgeGroup });
+      centerPositions.set(currentTitle, to.clone());
+      recordJourneyPos(currentTitle, to);
+      journeyMeta.set(currentTitle, { wikidataId: star.center.wikidataId, length: star.center.length, categories: star.center.categories });
+      updateTrail();
+      trailLine.visible = trailMode;
+      visited.add(currentTitle);
+      updateBreadcrumbs();
+      hovered = null;
+      tooltip.classList.remove('show');
+      isAnimating = false;
+      ensureCrossLinks(currentTitle);
+      applyNeighborTypes(currentTitle);
+      flushQueuedActions();
+    }
+  }
+  requestAnimationFrame(tick);
 }
 
 // ====== Hover ======
