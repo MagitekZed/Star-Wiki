@@ -1617,9 +1617,52 @@ function closeMapNodePopup(){
   if (p){ p.classList.add('hidden'); p.innerHTML = ''; p.removeAttribute('data-title'); }
 }
 // Fly from the galaxy map to a node (used by the panel's "Travel here" action).
+// BFS the visited subgraph (takenEdges treated undirected) for a path from `from` to
+// `to`. Returns the title sequence from `from` exclusive to `to` inclusive, or null if
+// the target isn't reachable through edges you've actually traversed.
+function findVisitedPath(from, to){
+  if (!from || !to || from === to) return null;
+  const adj = new Map();
+  const link = (a, b) => { if (!adj.has(a)) adj.set(a, new Set()); adj.get(a).add(b); };
+  takenEdges.forEach((tos, a) => { tos.forEach(b => { link(a, b); link(b, a); }); });
+  if (!adj.has(from)) return null;
+  const parent = new Map([[from, null]]);
+  const q = [from];
+  while (q.length){
+    const u = q.shift();
+    if (u === to) break;
+    for (const v of (adj.get(u) || [])) if (!parent.has(v)){ parent.set(v, u); q.push(v); }
+  }
+  if (!parent.has(to)) return null;
+  const path = [];
+  for (let cur = to; cur !== null && cur !== from; cur = parent.get(cur)) path.unshift(cur);
+  return path.length ? path : null;
+}
+
 function travelToMapNode(title){
+  // If the target sits on your current walk, fly via the breadcrumb path as before.
   const idx = history.lastIndexOf(title);
-  transitionOutOfOverview(() => { if (idx >= 0 && idx !== historyIndex) jumpToBreadcrumb(idx); });
+  if (idx >= 0){
+    transitionOutOfOverview(() => { if (idx !== historyIndex) jumpToBreadcrumb(idx); });
+    return;
+  }
+  // Otherwise it's on a side-branch of the visited graph. Find a route through edges
+  // you've actually traversed, extend the walk with it, and fly the trail.
+  const path = findVisitedPath(currentTitle, title);
+  if (!path){
+    transitionOutOfOverview(() => showToast("Can't reach that node from here."));
+    return;
+  }
+  transitionOutOfOverview(() => {
+    history = history.slice(0, historyIndex + 1).concat(path);
+    const targetIndex = history.length - 1;
+    if (targetIndex - historyIndex === 1){
+      historyIndex = targetIndex;
+      travelToNeighbor(history[targetIndex], false);
+    } else {
+      flyAlongTrail(targetIndex);
+    }
+  });
 }
 
 function escapeHtml(s){
@@ -3014,6 +3057,11 @@ async function buildJourneyClusters(titles){
 
   // Recent stops stay full; the ones farthest from the destination collapse to dim points.
   enforceGhostBudget();
+
+  // Seed the visited graph with the path's consecutive hops, so a loaded path participates
+  // in galaxy-map "Travel here" — once you branch off, you can still navigate back to its
+  // dropped stops via the visited subgraph.
+  for (let i = 1; i < history.length; i++) recordEdge(history[i-1], history[i]);
 
   journeyBuilding = false;
   setLoading(false);
