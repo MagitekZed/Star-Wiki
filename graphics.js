@@ -1626,8 +1626,9 @@ function renderMapLegend(types){
   ).join('');
   box.innerHTML =
     `<div class="legend-row legend-size"><span class="legend-dot dot-sm"></span><span class="legend-dot dot-lg"></span> Bigger star = links to more of your stops</div>` +
-    (swatches ? `<div class="legend-row legend-types">${swatches}</div>` : '') +
-    `<div class="legend-row legend-lines"><span class="legend-line route"></span> Paths you've travelled &nbsp; <span class="legend-line inter"></span> Links between your stops</div>` +
+    (swatches ? `<div class="legend-cap">Node colour</div><div class="legend-row legend-types">${swatches}</div>` : '') +
+    `<div class="legend-row legend-lines"><span class="legend-line route"></span> Paths you've travelled</div>` +
+    `<div class="legend-row legend-lines"><span class="legend-line inter"></span> Links between your stops</div>` +
     `<div class="legend-note">${LEGEND_HELP}</div>`;
   box.classList.remove('hidden');
   requestAnimationFrame(() => { box.style.opacity = '1'; });

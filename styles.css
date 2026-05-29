@@ -120,6 +120,7 @@ header h1.brand { display:flex; align-items:center; gap:8px; margin:0 6px 0 0; f
 .map-legend .legend-line { display:inline-block; width:16px; height:0; border-top-width:2px; border-top-style:solid; vertical-align:middle; }
 .map-legend .legend-line.route { border-color:#9fb8ff; }
 .map-legend .legend-line.inter { border-color:#8a7cc8; border-top-style:dashed; }
+.map-legend .legend-cap { color:var(--muted); font-size:9.5px; text-transform:uppercase; letter-spacing:0.07em; margin-top:1px; }
 .map-legend .legend-note { color:var(--muted); font-size:10px; line-height:1.45; border-top:1px solid var(--hairline); padding-top:7px; margin-top:1px; }
 
 /* Cluster-view link-type legend: collapsed chip, bottom-left, expands on hover */
