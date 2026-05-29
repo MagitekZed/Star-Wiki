@@ -630,6 +630,40 @@ function updateTrail(){
 let currentTitle = null;
 let history = [];
 let historyIndex = -1;
+// Tree-of-parents navigation. Each page has exactly one parent — the page it was FIRST
+// reached from — so every node has a canonical root→node path. The breadcrumb (`history`)
+// is derived from this tree, so it always shows the canonical chain to the current page
+// with no loops, and switching to a node on a different branch automatically switches
+// the breadcrumb to that branch (rather than appending the walk through the graph).
+// `takenEdges` still holds the full visited subgraph for the galaxy map / branch flight.
+const parents = new Map();   // page -> parent title (root has null)
+const lastChild = new Map(); // page -> the child you most recently went to from here (→ green spoke)
+
+// Walk parents up to the root and return the chain root→title.
+function treePath(title){
+  if (!title) return [];
+  const out = []; const seen = new Set();
+  for (let cur = title; cur != null; cur = (parents.get(cur) ?? null)){
+    if (seen.has(cur)) break; // cycle guard (shouldn't happen)
+    seen.add(cur); out.unshift(cur);
+  }
+  return out;
+}
+// Make `history` (and `historyIndex`) reflect the tree path of the given title. The
+// current page is always at the tip, so historyIndex = history.length - 1.
+function setHistoryTo(title){
+  history = treePath(title);
+  historyIndex = history.length - 1;
+}
+// Link a child to its (first) parent; idempotent — re-visiting doesn't re-parent.
+function linkParent(child, parent){
+  if (!child) return;
+  if (!parents.has(child)) parents.set(child, parent ?? null);
+}
+function rememberForward(parent, child){
+  if (parent && child && parent !== child) lastChild.set(parent, child);
+}
+function resetTree(){ parents.clear(); lastChild.clear(); }
 // Branch memory: page -> Set of pages you've navigated to from it. Records every hop,
 // never truncated; cleared only on a fresh start (search/random/reset/loadPath). Drives
 // the gold "parked branch" spokes (and, later, the galaxy-map graph edges).
@@ -734,12 +768,12 @@ function getChainPrev(){
   return historyIndex > 0 ? history[historyIndex - 1] : null;
 }
 
-// Walk-relative spokes for the page at history index `i`: where Back/Left goes (red),
-// where Forward/Right goes (green), and any other pages visited from here (gold branches).
-// Position-based so it's consistent in both directions and handles a page visited twice.
-function walkSpokesFor(i, title){
-  const back = (i > 0) ? history[i - 1] : null;
-  const fwd  = (i >= 0 && i < history.length - 1) ? history[i + 1] : null;
+// Walk-relative spokes from the tree-of-parents: back = the page this one's parented to
+// (where Back/Left goes), forward = the most recently traversed child (Forward/Right),
+// gold = any other pages visited from here. `_i` is ignored (kept for caller compat).
+function walkSpokesFor(_i, title){
+  const back = parents.get(title) ?? null;
+  const fwd  = lastChild.get(title) ?? null;
   const gold = [];
   const taken = takenEdges.get(title);
   if (taken) for (const t of taken){ if (t && t !== back && t !== fwd && t !== title) gold.push(t); }
@@ -752,9 +786,8 @@ function recordEdge(from, to){
 }
 
 function goBackOne(){
-  const prev = getChainPrev();
-  if (prev && historyIndex > 0 && !isAnimating && !journeyBuilding) {
-    historyIndex--;
+  const prev = parents.get(currentTitle);
+  if (prev && !isAnimating && !journeyBuilding) {
     travelToNeighbor(prev, false);
     return true;
   }
@@ -762,9 +795,8 @@ function goBackOne(){
 }
 
 function goForwardOne(){
-  if (historyIndex < history.length - 1 && !isAnimating && !journeyBuilding) {
-    const next = history[historyIndex + 1];
-    historyIndex++;
+  const next = lastChild.get(currentTitle);
+  if (next && !isAnimating && !journeyBuilding) {
     travelToNeighbor(next, false);
     return true;
   }
@@ -960,13 +992,10 @@ function rebuildStar(title, addToHistory=true){
   return getPageStar(title, showBacklinks).then(star => {
     setLoading(false);
     const canonical = star.center.title;
-    if (addToHistory) {
-      if (historyIndex < history.length - 1) history = history.slice(0, historyIndex + 1);
-      history.push(canonical);
-      historyIndex = history.length - 1;
-    } else {
-      history[historyIndex] = canonical;
-    }
+    // For a search/random/share-load, this page becomes a root in the tree (onGo cleared
+    // the tree first). For other paths (already linked), linkParent is a no-op.
+    if (addToHistory) linkParent(canonical, null);
+    setHistoryTo(canonical);
     clusterGroups.forEach(g=>{
       if (g.star !== starGroup) disposeGroup(g.star);
       if (g.edge !== edgeGroup) disposeGroup(g.edge);
@@ -1646,22 +1675,19 @@ function travelToMapNode(title){
     transitionOutOfOverview(() => { if (idx !== historyIndex) jumpToBreadcrumb(idx); });
     return;
   }
-  // Otherwise it's on a side-branch of the visited graph. Find a route through edges
-  // you've actually traversed, extend the walk with it, and fly the trail.
+  // Otherwise it's on a side-branch of the visited graph. Fly the camera through the
+  // edges you've actually traversed (BFS over takenEdges), but DON'T extend history —
+  // the breadcrumb after landing comes from the target's tree path (its canonical
+  // chain back to the root), so we cleanly *switch branches* instead of writing a
+  // loopy walk that retraces how we physically got there.
   const path = findVisitedPath(currentTitle, title);
   if (!path){
     transitionOutOfOverview(() => showToast("Can't reach that node from here."));
     return;
   }
   transitionOutOfOverview(() => {
-    history = history.slice(0, historyIndex + 1).concat(path);
-    const targetIndex = history.length - 1;
-    if (targetIndex - historyIndex === 1){
-      historyIndex = targetIndex;
-      travelToNeighbor(history[targetIndex], false);
-    } else {
-      flyAlongTrail(targetIndex);
-    }
+    if (path.length === 1) travelToNeighbor(title, false);
+    else flyAlongTrail(title, path);
   });
 }
 
@@ -1958,12 +1984,13 @@ async function travelToNeighbor(targetTitle, addToHistory=true){
   const gqIdx = ghostQueue.indexOf(canonical); if (gqIdx !== -1) ghostQueue.splice(gqIdx, 1);
 
   if (addToHistory) {
-    if (historyIndex < history.length - 1) history = history.slice(0, historyIndex + 1);
-    history.push(canonical);
-    historyIndex = history.length - 1;
-  } else {
-    history[historyIndex] = canonical;
+    // Forward to a (possibly new) page: link it to the tree (first arrival wins) and
+    // remember it as the most-recent child of where we came from (the green spoke).
+    linkParent(canonical, fromTitle);
+    rememberForward(fromTitle, canonical);
   }
+  // Either way, the breadcrumb now derives from the canonical's tree path.
+  setHistoryTo(canonical);
 
   const newStar = new THREE.Group();
   const newEdge = new THREE.Group();
@@ -2526,29 +2553,24 @@ function jumpToBreadcrumb(index){
   if (isAnimating) { queueNav({ type:'breadcrumb', index }); return; }
   if (Math.abs(index - historyIndex) === 1) {
     // Adjacent: a single smooth hop (already a continuous tween).
-    historyIndex = index;
     travelToNeighbor(history[index], false);
   } else {
-    // Multi-stop: one continuous flight along the trail through every stop in between.
-    flyAlongTrail(index);
+    // Multi-stop: one continuous flight along the tree path through every stop in between.
+    const target = history[index];
+    const passTitles = history.slice(index, history.length - 1).reverse();
+    flyAlongTrail(target, passTitles);
   }
 }
 
-// Continuous camera flight from the current stop, through every charted stop in
-// between, to history[targetIndex]. Unlike a chain of hops, the camera never stops at
-// the intermediate nodes — it eases in once, glides the whole polyline, eases out once.
-// Only the target is rebuilt and made current; the in-between clusters stay put as the
-// visible trail we fly past. (This is the routine the galaxy-map "travel here" reuses.)
-async function flyAlongTrail(targetIndex){
+// Continuous camera flight from the current stop, through `passTitles` (an ordered list
+// of intermediate-then-target titles), to `targetTitle`. Unlike a chain of hops, the
+// camera never stops at intermediates — it eases in once, glides the whole polyline,
+// eases out once. Only the target is rebuilt and made current; the in-between clusters
+// stay put as the visible trail we fly past. (Reused by the galaxy-map "travel here".)
+async function flyAlongTrail(targetTitle, passTitles){
   if (isAnimating || journeyBuilding || !currentTitle) return;
-  const startIndex = historyIndex;
-  const step = targetIndex < startIndex ? -1 : 1;
-  const targetTitle = history[targetIndex];
   const startCurrent = currentTitle;
-
-  // Stops we pass through, after the current one, up to and including the target.
-  const passTitles = [];
-  for (let k = startIndex + step; ; k += step){ passTitles.push(history[k]); if (k === targetIndex) break; }
+  if (!passTitles || !passTitles.length) passTitles = [targetTitle];
 
   const posOf = t => centerPositions.get(t) || journeyPositions.get(t) || null;
   const fromAbs = (posOf(startCurrent) || new THREE.Vector3()).clone();
@@ -2577,10 +2599,10 @@ async function flyAlongTrail(targetIndex){
   const oldGrp = clusterGroups.get(canonical);
   if (oldGrp){ disposeGroup(oldGrp.star); disposeGroup(oldGrp.edge); scene.remove(oldGrp.star); scene.remove(oldGrp.edge); clusterGroups.delete(canonical); }
   const gqIdx = ghostQueue.indexOf(canonical); if (gqIdx !== -1) ghostQueue.splice(gqIdx, 1);
-  history[targetIndex] = canonical;
 
   const newStar = new THREE.Group(), newEdge = new THREE.Group(), newMap = new Map();
-  buildStarInto(canonical, star, newStar, newEdge, newMap, targetIndex, to);
+  // atIndex is unused by walkSpokesFor (which reads parents/lastChild), so 0 is fine.
+  buildStarInto(canonical, star, newStar, newEdge, newMap, 0, to);
   newStar.position.copy(to); newEdge.position.copy(to);
   scene.add(newStar); scene.add(newEdge);
 
@@ -2649,7 +2671,8 @@ async function flyAlongTrail(targetIndex){
       newEdge.traverse(o => { if (o.material && 'opacity' in o.material) o.material.opacity = o.userData.baseOpacity; });
       starGroup = newStar; edgeGroup = newEdge; wordToMesh = newMap;
       currentTitle = canonical;
-      historyIndex = targetIndex;
+      // The breadcrumb now reflects the target's canonical tree path (no loops).
+      setHistoryTo(canonical);
       clusterGroups.set(currentTitle, { star: starGroup, edge: edgeGroup });
       centerPositions.set(currentTitle, to.clone());
       recordJourneyPos(currentTitle, to);
@@ -2876,6 +2899,7 @@ function onGo(val){
   summaryCache.clear();
   visited.clear();
   takenEdges.clear(); // fresh start — forget branch memory
+  resetTree();
   history = [];
   historyIndex = -1;
   updateBreadcrumbs();
@@ -2900,6 +2924,7 @@ function resetToWelcome(){
   currentTitle = null;
   history = [];
   takenEdges.clear();
+  resetTree();
   historyIndex = -1;
   visited.clear();
   showBacklinks = false;
@@ -2985,9 +3010,13 @@ function loadPath(path){
   starGroup = new THREE.Group(); edgeGroup = new THREE.Group();
   scene.add(starGroup); scene.add(edgeGroup);
   wordToMesh = new Map();
-  history = path.slice();
-  takenEdges.clear(); // the path lives in history; branch memory starts empty
-  historyIndex = history.length - 1;
+  takenEdges.clear(); // the path lives in the tree; branch memory starts empty
+  // Seed the tree with the loaded path's input titles (re-linked to canonicals once
+  // buildJourneyClusters finishes). Each stop's parent = the previous stop.
+  resetTree();
+  for (let i = 1; i < path.length; i++){ parents.set(path[i], path[i-1]); lastChild.set(path[i-1], path[i]); }
+  parents.set(path[0], null);
+  setHistoryTo(path[path.length - 1]);
   controls.target.set(0, 0, 0);
   camera.position.copy(DEFAULT_CAM_POS);
   controls.update();
@@ -3058,10 +3087,18 @@ async function buildJourneyClusters(titles){
   // Recent stops stay full; the ones farthest from the destination collapse to dim points.
   enforceGhostBudget();
 
-  // Seed the visited graph with the path's consecutive hops, so a loaded path participates
-  // in galaxy-map "Travel here" — once you branch off, you can still navigate back to its
-  // dropped stops via the visited subgraph.
-  for (let i = 1; i < history.length; i++) recordEdge(history[i-1], history[i]);
+  // Re-link the tree with the now-canonical chain (loadPath pre-linked with input titles,
+  // which may differ from canonicals after redirects). Also seed the visited graph with
+  // the path's consecutive hops, so a loaded path participates in galaxy-map "Travel here"
+  // even after you branch off and its dropped stops fall out of your current breadcrumb.
+  resetTree();
+  for (let i = 1; i < history.length; i++){
+    parents.set(history[i], history[i-1]);
+    lastChild.set(history[i-1], history[i]);
+    recordEdge(history[i-1], history[i]);
+  }
+  if (history.length) parents.set(history[0], null);
+  if (currentTitle) setHistoryTo(currentTitle);
 
   journeyBuilding = false;
   setLoading(false);
