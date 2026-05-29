@@ -1344,7 +1344,72 @@ function buildOverview(){
     });
   });
 
+  addOverviewDecor(overviewGroup);
   scene.add(overviewGroup);
+}
+
+// Decorative-only galaxy-map "instruments": concentric range rings on the journey's
+// horizontal plane, compass-style tick marks on the outermost ring, and a faint vertical
+// axis through the centroid. No meaning — purely a sci-fi/tactical-map vibe. Lives in
+// overviewGroup, so it fades in/out with the rest on the transition.
+function addOverviewDecor(group){
+  const positions = [...journeyPositions.values()];
+  if (positions.length < 2) return;
+  const centroid = new THREE.Vector3();
+  positions.forEach(p => centroid.add(p));
+  centroid.divideScalar(positions.length);
+  let maxR = 0;
+  positions.forEach(p => { const d = Math.hypot(p.x - centroid.x, p.z - centroid.z); if (d > maxR) maxR = d; });
+  if (maxR < 1) maxR = SEGMENT_DIST * 2;
+
+  const decorTag = { kind: 'overviewDecor' };
+
+  // Concentric horizontal range rings (radar-style), fading outward.
+  const ringRadii = [maxR * 0.55, maxR * 1.0, maxR * 1.45];
+  const ringOpacities = [0.30, 0.22, 0.14];
+  const RING_SEGMENTS = 192;
+  ringRadii.forEach((r, idx) => {
+    const pts = [];
+    for (let s = 0; s <= RING_SEGMENTS; s++){
+      const a = (s / RING_SEGMENTS) * Math.PI * 2;
+      pts.push(new THREE.Vector3(centroid.x + Math.cos(a) * r, centroid.y, centroid.z + Math.sin(a) * r));
+    }
+    const geo = new THREE.BufferGeometry().setFromPoints(pts);
+    const mat = new THREE.LineBasicMaterial({ color: 0x8aa3d8, transparent: true, opacity: ringOpacities[idx], depthWrite: false, depthTest: false });
+    const ring = new THREE.LineLoop(geo, mat);
+    ring.userData = decorTag;
+    ring.raycast = () => {};
+    group.add(ring);
+  });
+
+  // Compass-style tick marks every 30° on the outermost ring, pointing slightly outward.
+  const outerR = ringRadii[ringRadii.length - 1];
+  const tickLen = outerR * 0.04;
+  const tickPts = [];
+  for (let i = 0; i < 12; i++){
+    const a = (i / 12) * Math.PI * 2;
+    const cosA = Math.cos(a), sinA = Math.sin(a);
+    tickPts.push(new THREE.Vector3(centroid.x + cosA * outerR, centroid.y, centroid.z + sinA * outerR));
+    tickPts.push(new THREE.Vector3(centroid.x + cosA * (outerR + tickLen), centroid.y, centroid.z + sinA * (outerR + tickLen)));
+  }
+  const tickGeo = new THREE.BufferGeometry().setFromPoints(tickPts);
+  const tickMat = new THREE.LineBasicMaterial({ color: 0xb6c8ff, transparent: true, opacity: 0.42, depthWrite: false, depthTest: false });
+  const ticks = new THREE.LineSegments(tickGeo, tickMat);
+  ticks.userData = decorTag;
+  ticks.raycast = () => {};
+  group.add(ticks);
+
+  // Faint vertical axis through the centroid for a 3D depth cue.
+  const axisLen = maxR * 0.5;
+  const axisGeo = new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(centroid.x, centroid.y - axisLen, centroid.z),
+    new THREE.Vector3(centroid.x, centroid.y + axisLen, centroid.z),
+  ]);
+  const axisMat = new THREE.LineBasicMaterial({ color: 0xb6c8ff, transparent: true, opacity: 0.18, depthWrite: false, depthTest: false });
+  const axis = new THREE.Line(axisGeo, axisMat);
+  axis.userData = decorTag;
+  axis.raycast = () => {};
+  group.add(axis);
 }
 
 function buildOverviewLabels(){
